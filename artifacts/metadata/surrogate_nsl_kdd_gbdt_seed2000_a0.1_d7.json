@@ -1,0 +1,12 @@
+{
+  "dataset": "nsl_kdd",
+  "target_model": "gbdt",
+  "seed_size": 2000,
+  "alpha": 0.1,
+  "depth": 7,
+  "hidden_dim": 256,
+  "epochs": 20,
+  "model_path": "artifacts\\models\\surrogate_nsl_kdd_gbdt_seed2000_a0.1_d7.pt",
+  "num_features": 38,
+  "num_classes": 5
+}

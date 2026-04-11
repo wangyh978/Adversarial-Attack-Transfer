@@ -1,0 +1,3 @@
+2026-04-11 17:04:21 | INFO | load_raw | Loaded NSL-KDD from data\nsl_kdd\raw\KDDTest+.txt shape=(22544, 44)
+2026-04-11 17:05:52 | INFO | load_raw | Loaded NSL-KDD from data\nsl_kdd\raw\KDDTest+.txt shape=(22544, 44)
+2026-04-11 17:06:34 | INFO | load_raw | Loaded NSL-KDD from data\nsl_kdd\raw\KDDTest+.txt shape=(22544, 44)

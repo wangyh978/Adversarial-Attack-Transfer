@@ -1,0 +1,5 @@
+dataset_name: nsl_kdd
+raw_dir: data/nsl_kdd/raw
+processed_dir: data/nsl_kdd/processed
+label_mode: 5class
+random_state: 42

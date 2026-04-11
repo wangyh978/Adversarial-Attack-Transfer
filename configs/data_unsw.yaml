@@ -1,0 +1,5 @@
+dataset_name: unsw_nb15
+raw_dir: data/unsw_nb15/raw
+processed_dir: data/unsw_nb15/processed
+label_mode: multiclass
+random_state: 42

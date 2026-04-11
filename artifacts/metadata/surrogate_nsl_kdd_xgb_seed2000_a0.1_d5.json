@@ -1,0 +1,12 @@
+{
+  "dataset": "nsl_kdd",
+  "target_model": "xgb",
+  "seed_size": 2000,
+  "alpha": 0.1,
+  "depth": 5,
+  "hidden_dim": 256,
+  "epochs": 20,
+  "model_path": "artifacts\\models\\surrogate_nsl_kdd_xgb_seed2000_a0.1_d5.pt",
+  "num_features": 38,
+  "num_classes": 5
+}
