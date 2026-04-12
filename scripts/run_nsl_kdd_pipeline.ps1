@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$false)]
-    [ValidateSet("Prepare", "Baseline", "Surrogate", "MinTransfer", "FullAttackMatrix", "FullPipeline")]
+    [ValidateSet("Prepare", "Baseline", "Surrogate", "MinTransfer", "FullAttackMatrix", "FullPipeline", "ReuseArtifacts")]
     [string]$Stage = "MinTransfer",
 
     [Parameter(Mandatory=$false)]
@@ -23,15 +23,10 @@ $ErrorActionPreference = "Stop"
 
 switch ($Stage) {
     "Prepare" {
-        .\scripts\run_min_transfer_matrix.ps1 `
-            -Dataset nsl_kdd `
-            -TargetModel tabnet `
-            -SeedSize $SeedSize `
-            -Alpha $Alpha `
-            -Depth $Depth `
-            -Attacks @() `
-            -SkipTargetTraining `
-            -SkipSurrogateTraining:$false
+        python -m src.data.load_raw --dataset nsl_kdd
+        python -m src.data.clean_labels --dataset nsl_kdd --mode 5class
+        python -m src.data.split_data --dataset nsl_kdd
+        python -m src.preprocess.run_preprocess_pipeline --dataset nsl_kdd
         break
     }
     "Baseline" {
@@ -75,7 +70,9 @@ switch ($Stage) {
             -SeedSize $SeedSize `
             -Alpha $Alpha `
             -Depth $Depth `
-            -Attacks $Attacks
+            -Attacks $Attacks `
+            -IncludeTargetTraining `
+            -IncludeSurrogateTraining
         break
     }
     "FullPipeline" {
@@ -89,6 +86,17 @@ switch ($Stage) {
             -IncludePreparation `
             -IncludeTargetTraining `
             -IncludeSurrogateTraining
+        break
+    }
+    "ReuseArtifacts" {
+        .\scripts\run_full_attack_matrix.ps1 `
+            -Dataset nsl_kdd `
+            -TargetModels $TargetModels `
+            -SeedSize $SeedSize `
+            -Alpha $Alpha `
+            -Depth $Depth `
+            -Attacks $Attacks `
+            -ReuseExistingArtifacts
         break
     }
     default {

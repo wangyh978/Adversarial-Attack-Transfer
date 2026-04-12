@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$false)]
-    [ValidateSet("Prepare", "Baseline", "Surrogate", "MinTransfer", "FullAttackMatrix", "FullPipeline")]
+    [ValidateSet("Prepare", "Baseline", "Surrogate", "MinTransfer", "FullAttackMatrix", "FullPipeline", "ReuseArtifacts")]
     [string]$Stage = "MinTransfer",
 
     [Parameter(Mandatory=$false)]
@@ -22,6 +22,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 switch ($Stage) {
+    "Prepare" {
+        python -m src.data.load_raw --dataset unsw_nb15
+        python -m src.data.clean_labels --dataset unsw_nb15 --mode multiclass
+        python -m src.data.split_data --dataset unsw_nb15
+        python -m src.preprocess.run_preprocess_pipeline --dataset unsw_nb15
+        break
+    }
     "Baseline" {
         python -m src.data.load_raw --dataset unsw_nb15
         python -m src.data.clean_labels --dataset unsw_nb15 --mode multiclass
@@ -63,7 +70,9 @@ switch ($Stage) {
             -SeedSize $SeedSize `
             -Alpha $Alpha `
             -Depth $Depth `
-            -Attacks $Attacks
+            -Attacks $Attacks `
+            -IncludeTargetTraining `
+            -IncludeSurrogateTraining
         break
     }
     "FullPipeline" {
@@ -77,6 +86,17 @@ switch ($Stage) {
             -IncludePreparation `
             -IncludeTargetTraining `
             -IncludeSurrogateTraining
+        break
+    }
+    "ReuseArtifacts" {
+        .\scripts\run_full_attack_matrix.ps1 `
+            -Dataset unsw_nb15 `
+            -TargetModels $TargetModels `
+            -SeedSize $SeedSize `
+            -Alpha $Alpha `
+            -Depth $Depth `
+            -Attacks $Attacks `
+            -ReuseExistingArtifacts
         break
     }
     default {

@@ -20,7 +20,8 @@ param(
 
     [switch]$IncludePreparation,
     [switch]$IncludeTargetTraining,
-    [switch]$IncludeSurrogateTraining
+    [switch]$IncludeSurrogateTraining,
+    [switch]$ReuseExistingArtifacts
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,12 +81,30 @@ if ($TargetModels.Count -eq 0) {
 }
 $LabelMode = Resolve-LabelMode -Dataset $Dataset
 
+if (-not $ReuseExistingArtifacts `
+    -and -not $IncludePreparation `
+    -and -not $IncludeTargetTraining `
+    -and -not $IncludeSurrogateTraining) {
+
+    $IncludeTargetTraining = $true
+    $IncludeSurrogateTraining = $true
+
+    Write-Host ""
+    Write-Host "[safe-default] No include switches were provided." -ForegroundColor Yellow
+    Write-Host "[safe-default] Automatically enabling target + surrogate retraining." -ForegroundColor Yellow
+    Write-Host "[safe-default] Use -ReuseExistingArtifacts if you really want to reuse old checkpoints." -ForegroundColor Yellow
+}
+
 Write-Host "Dataset      : $Dataset" -ForegroundColor Yellow
 Write-Host "TargetModels : $($TargetModels -join ', ')" -ForegroundColor Yellow
 Write-Host "SeedSize     : $SeedSize" -ForegroundColor Yellow
 Write-Host "Alpha        : $Alpha" -ForegroundColor Yellow
 Write-Host "Depth        : $Depth" -ForegroundColor Yellow
 Write-Host "Attacks      : $($Attacks -join ', ')" -ForegroundColor Yellow
+Write-Host "Preparation  : $IncludePreparation" -ForegroundColor Yellow
+Write-Host "TrainTarget  : $IncludeTargetTraining" -ForegroundColor Yellow
+Write-Host "TrainSurr    : $IncludeSurrogateTraining" -ForegroundColor Yellow
+Write-Host "ReuseOnly    : $ReuseExistingArtifacts" -ForegroundColor Yellow
 
 if ($IncludePreparation) {
     Invoke-Step "python -m src.data.load_raw --dataset $Dataset"
