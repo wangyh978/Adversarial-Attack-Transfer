@@ -1,0 +1,29 @@
+{
+  "dataset": "nsl_kdd",
+  "target_model": "tabnet",
+  "seed_size": 2000,
+  "alpha": 0.2,
+  "depth": 5,
+  "accuracy": 0.9302188054405676,
+  "f1_macro": 0.8911657372947384,
+  "target_agreement": 0.9550561797752808,
+  "composite_score": 0.9309215721641754,
+  "rank": 1,
+  "model_path": "artifacts\\models\\surrogate_nsl_kdd_tabnet_seed2000_a0.2_d5.pt",
+  "evaluation_json": "results\\tables\\surrogate_eval_nsl_kdd_tabnet_seed2000_a0.2_d5.json",
+  "summary_csv": "results\\tables\\surrogate_ablation_summary_nsl_kdd_tabnet.csv",
+  "selection_policy": {
+    "weights": {
+      "target_agreement": 0.5,
+      "f1_macro": 0.3,
+      "accuracy": 0.2
+    },
+    "tie_break": [
+      "target_agreement",
+      "f1_macro",
+      "accuracy",
+      "seed_size",
+      "depth"
+    ]
+  }
+}

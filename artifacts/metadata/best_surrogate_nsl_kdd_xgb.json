@@ -1,0 +1,29 @@
+{
+  "dataset": "nsl_kdd",
+  "target_model": "xgb",
+  "seed_size": 2000,
+  "alpha": 0.1,
+  "depth": 3,
+  "accuracy": 0.9296274393849792,
+  "f1_macro": 0.87688787806379,
+  "target_agreement": 0.9314015375517444,
+  "composite_score": 0.9146926200720049,
+  "rank": 1,
+  "model_path": "artifacts\\models\\surrogate_nsl_kdd_xgb_seed2000_a0.1_d3.pt",
+  "evaluation_json": "results\\tables\\surrogate_eval_nsl_kdd_xgb_seed2000_a0.1_d3.json",
+  "summary_csv": "results\\tables\\surrogate_ablation_summary_nsl_kdd_xgb.csv",
+  "selection_policy": {
+    "weights": {
+      "target_agreement": 0.5,
+      "f1_macro": 0.3,
+      "accuracy": 0.2
+    },
+    "tie_break": [
+      "target_agreement",
+      "f1_macro",
+      "accuracy",
+      "seed_size",
+      "depth"
+    ]
+  }
+}

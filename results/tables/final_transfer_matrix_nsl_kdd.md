@@ -1,11 +1,11 @@
 | attack   | target_model   |   transfer_success_rate |
 |:---------|:---------------|------------------------:|
-| FGM      | GBDT           |                  0.487  |
-| FGM      | TabNet         |                  0.1156 |
-| FGM      | XGB            |                  0.3971 |
-| PGD      | GBDT           |                  0.5308 |
-| PGD      | TabNet         |                  0.1733 |
-| PGD      | XGB            |                  0.3933 |
-| SLIDE    | GBDT           |                  0.5308 |
-| SLIDE    | TabNet         |                  0.1733 |
-| SLIDE    | XGB            |                  0.3933 |
+| FGM      | GBDT           |                  0.505  |
+| FGM      | TabNet         |                  0.1886 |
+| FGM      | XGB            |                  0.4317 |
+| PGD      | GBDT           |                  0.5213 |
+| PGD      | TabNet         |                  0.3253 |
+| PGD      | XGB            |                  0.5461 |
+| SLIDE    | GBDT           |                  0.5213 |
+| SLIDE    | TabNet         |                  0.3253 |
+| SLIDE    | XGB            |                  0.5461 |

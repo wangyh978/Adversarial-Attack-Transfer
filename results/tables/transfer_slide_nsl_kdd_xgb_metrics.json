@@ -1,5 +1,5 @@
 {
-  "transfer_success_rate": 0.39325842696629215,
-  "perturbation_generalization": 0.39325842696629215,
+  "transfer_success_rate": 0.5461265523358959,
+  "perturbation_generalization": 0.5461265523358959,
   "structural_robustness": 1.0
 }
