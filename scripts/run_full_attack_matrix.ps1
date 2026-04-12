@@ -1,45 +1,123 @@
+param(
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("nsl_kdd", "unsw_nb15")]
+    [string]$Dataset = "nsl_kdd",
+
+    [Parameter(Mandatory=$false)]
+    [string[]]$TargetModels = @(),
+
+    [Parameter(Mandatory=$false)]
+    [int]$SeedSize = 1000,
+
+    [Parameter(Mandatory=$false)]
+    [double]$Alpha = 0.1,
+
+    [Parameter(Mandatory=$false)]
+    [int]$Depth = 3,
+
+    [Parameter(Mandatory=$false)]
+    [string[]]$Attacks = @("fgm", "pgd", "slide"),
+
+    [switch]$IncludePreparation,
+    [switch]$IncludeTargetTraining,
+    [switch]$IncludeSurrogateTraining
+)
+
 $ErrorActionPreference = "Stop"
 
-$dataset = "nsl_kdd"
-$targets = @("tabnet", "xgb", "gbdt")
-$seedSizes = @(500, 1000, 2000)
-$alphas = @(0.1, 0.2, 0.5)
-$attacks = @("fgm", "pgd", "slide")   # 如果支持 C&W，改成 @("fgm","pgd","slide","cw")
+function Resolve-DefaultTargets {
+    param([string]$Dataset)
+    switch ($Dataset) {
+        "nsl_kdd"   { return @("tabnet", "xgb", "gbdt") }
+        "unsw_nb15" { return @("xgb") }
+        default     { throw "Unsupported dataset: $Dataset" }
+    }
+}
 
-function Run-Step([string]$cmd) {
+function Resolve-LabelMode {
+    param([string]$Dataset)
+    switch ($Dataset) {
+        "nsl_kdd"   { return "5class" }
+        "unsw_nb15" { return "multiclass" }
+        default     { throw "Unsupported dataset: $Dataset" }
+    }
+}
+
+function Invoke-Step {
+    param([string]$Command)
     Write-Host ""
-    Write-Host ">> $cmd" -ForegroundColor Cyan
-    Invoke-Expression $cmd
+    Write-Host ">> $Command" -ForegroundColor Cyan
+    Invoke-Expression $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed: $Command"
+    }
 }
 
-# 1) build seed sets
-foreach ($seed in $seedSizes) {
-    Run-Step "python -m src.data.build_seed_set --dataset $dataset --seed_size $seed"
-}
+function Invoke-TargetTraining {
+    param([string]$Dataset, [string]$TargetModel)
 
-# 2) prepare queried seeds + mixup + surrogate trainset
-foreach ($target in $targets) {
-    foreach ($seed in $seedSizes) {
-        Run-Step "python -m src.data.query_seed_labels --dataset $dataset --target_model $target --seed_size $seed"
-
-        foreach ($alpha in $alphas) {
-            Run-Step "python -m src.augment.run_mixup --dataset $dataset --target_model $target --seed_size $seed --alpha $alpha"
-            Run-Step "python -m src.data.build_surrogate_trainset --dataset $dataset --target_model $target --seed_size $seed --alpha $alpha"
+    switch ($TargetModel) {
+        "xgb" {
+            Invoke-Step "python -m src.models.train_xgb --dataset $Dataset"
+        }
+        "gbdt" {
+            Invoke-Step "python -m src.models.train_gbdt --dataset $Dataset"
+        }
+        "tabnet" {
+            Invoke-Step "python -m src.models.train_tabnet --dataset $Dataset"
+        }
+        "random_forest" {
+            Invoke-Step "python -m src.models.train_sklearn_baseline --dataset $Dataset --model random_forest"
+        }
+        default {
+            throw "Unsupported target model for training: $TargetModel"
         }
     }
-
-    # 3) surrogate ablation / evaluate / summarize / select
-    Run-Step "python -m src.models.run_surrogate_ablation --dataset $dataset --target_model $target"
-    Run-Step "python -m src.evaluation.evaluate_surrogate_batch --dataset $dataset --target_model $target"
-    Run-Step "python -m src.reporting.summarize_surrogate_ablation --dataset $dataset --target_model $target"
-    Run-Step "python -m src.models.select_best_surrogate --dataset $dataset --target_model $target"
-
-    # 4) attacks
-    foreach ($attack in $attacks) {
-        Run-Step "python -m src.transfer.generate_from_surrogate --dataset $dataset --target_model $target --attack $attack"
-        Run-Step "python -m src.transfer.attack_target --dataset $dataset --target_model $target --attack $attack"
-    }
 }
 
-# 5) summarize final transfer matrix
-Run-Step "python scripts/summarize_transfer_matrix.py --dataset $dataset"
+if ($TargetModels.Count -eq 0) {
+    $TargetModels = Resolve-DefaultTargets -Dataset $Dataset
+}
+$LabelMode = Resolve-LabelMode -Dataset $Dataset
+
+Write-Host "Dataset      : $Dataset" -ForegroundColor Yellow
+Write-Host "TargetModels : $($TargetModels -join ', ')" -ForegroundColor Yellow
+Write-Host "SeedSize     : $SeedSize" -ForegroundColor Yellow
+Write-Host "Alpha        : $Alpha" -ForegroundColor Yellow
+Write-Host "Depth        : $Depth" -ForegroundColor Yellow
+Write-Host "Attacks      : $($Attacks -join ', ')" -ForegroundColor Yellow
+
+if ($IncludePreparation) {
+    Invoke-Step "python -m src.data.load_raw --dataset $Dataset"
+    Invoke-Step "python -m src.data.clean_labels --dataset $Dataset --mode $LabelMode"
+    Invoke-Step "python -m src.data.split_data --dataset $Dataset"
+    Invoke-Step "python -m src.preprocess.run_preprocess_pipeline --dataset $Dataset"
+}
+
+foreach ($target in $TargetModels) {
+    Write-Host ""
+    Write-Host "==== Target: $target ====" -ForegroundColor Magenta
+
+    if ($IncludeTargetTraining) {
+        Invoke-TargetTraining -Dataset $Dataset -TargetModel $target
+    }
+
+    if ($IncludeSurrogateTraining) {
+        Invoke-Step "python -m src.data.build_seed_set --dataset $Dataset --seed_size $SeedSize"
+        Invoke-Step "python -m src.data.query_seed_labels --dataset $Dataset --target_model $target --seed_size $SeedSize"
+        Invoke-Step "python -m src.augment.run_mixup --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha"
+        Invoke-Step "python -m src.data.build_surrogate_trainset --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha"
+        Invoke-Step "python -m src.models.train_surrogate_mlp --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth"
+        Invoke-Step "python -m src.evaluation.evaluate_surrogate --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth"
+    }
+
+    foreach ($attack in $Attacks) {
+        Invoke-Step "python -m src.transfer.generate_from_surrogate --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth --attack $attack"
+        Invoke-Step "python -m src.transfer.attack_target --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth --attack $attack"
+    }
+
+    Invoke-Step "python scripts/summarize_transfer_matrix.py --dataset $Dataset --target-model $target"
+}
+
+Write-Host ""
+Write-Host "Full attack matrix pipeline finished." -ForegroundColor Green

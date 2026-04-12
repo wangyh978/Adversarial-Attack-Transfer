@@ -25,3 +25,9 @@
 2026-04-12 12:17:02 | INFO | load_raw | Loaded UNSW-NB15 shape=(257673, 47)
 2026-04-12 12:17:05 | INFO | load_raw | Loaded UNSW-NB15 official split from data\unsw_nb15\raw\UNSW_NB15_training-set.csv and data\unsw_nb15\raw\UNSW_NB15_testing-set.csv
 2026-04-12 12:17:05 | INFO | load_raw | Loaded UNSW-NB15 shape=(257673, 47)
+2026-04-12 18:16:46 | INFO | load_raw | Loaded NSL-KDD from data\nsl_kdd\raw\KDDTest+.txt shape=(22544, 44)
+2026-04-12 18:16:47 | INFO | load_raw | Loaded NSL-KDD from data\nsl_kdd\raw\KDDTest+.txt shape=(22544, 44)
+2026-04-12 18:17:46 | INFO | load_raw | Loaded UNSW-NB15 official split from data\unsw_nb15\raw\UNSW_NB15_training-set.csv and data\unsw_nb15\raw\UNSW_NB15_testing-set.csv
+2026-04-12 18:17:46 | INFO | load_raw | Loaded UNSW-NB15 shape=(257673, 47)
+2026-04-12 18:17:50 | INFO | load_raw | Loaded UNSW-NB15 official split from data\unsw_nb15\raw\UNSW_NB15_training-set.csv and data\unsw_nb15\raw\UNSW_NB15_testing-set.csv
+2026-04-12 18:17:50 | INFO | load_raw | Loaded UNSW-NB15 shape=(257673, 47)
