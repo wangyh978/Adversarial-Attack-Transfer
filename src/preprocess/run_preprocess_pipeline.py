@@ -143,7 +143,10 @@ def main() -> None:
         "train_shape": list(X_train.shape),
         "val_shape": list(X_val.shape),
         "test_shape": list(X_test.shape),
+        "num_classes": int(len(sorted(train_df["label_id"].unique()))),
+        "label_ids": sorted(train_df["label_id"].unique().tolist()),
     }
+
     with open(Path("artifacts/preprocessors") / f"{args.dataset}_feature_info.json", "w", encoding="utf-8") as f:
         json.dump(info, f, ensure_ascii=False, indent=2)
 
