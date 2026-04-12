@@ -1,0 +1,6 @@
+{
+  "model_name": "random_forest",
+  "dataset": "unsw_nb15",
+  "model_path": "artifacts\\models\\random_forest_unsw_nb15.pkl",
+  "metrics_path": "results\\tables\\random_forest_unsw_nb15_metrics.json"
+}

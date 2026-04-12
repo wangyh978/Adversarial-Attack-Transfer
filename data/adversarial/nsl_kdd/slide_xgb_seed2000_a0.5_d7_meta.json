@@ -1,0 +1,6 @@
+{
+  "attack_name": "pgd",
+  "epsilon": 0.5,
+  "steps": 10,
+  "step_size": 0.1
+}

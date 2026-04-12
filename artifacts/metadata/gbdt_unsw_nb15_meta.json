@@ -1,0 +1,6 @@
+{
+  "model_name": "gbdt",
+  "dataset": "unsw_nb15",
+  "model_path": "artifacts\\models\\gbdt_unsw_nb15.pkl",
+  "metrics_path": "results\\tables\\gbdt_unsw_nb15_metrics.json"
+}

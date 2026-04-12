@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from pathlib import Path
+
 import pandas as pd
 
 from src.data.load_raw import load_nsl_kdd, load_unsw_nb15
-from src.data.label_maps import map_nsl_label_to_5class
+from src.data.label_maps import (
+    UNSW_LABEL_ORDER,
+    map_nsl_label_to_5class,
+    normalize_unsw_attack_cat,
+)
 from src.utils.io import ensure_dir, save_json
 
 
@@ -16,6 +21,7 @@ def build_label_id_map(labels: pd.Series) -> dict[str, int]:
 
 def clean_nsl_labels(df: pd.DataFrame, mode: str = "5class") -> tuple[pd.DataFrame, dict[str, int]]:
     out = df.copy()
+
     label_col = "label_raw" if "label_raw" in out.columns else out.columns[-1]
     out["label_raw"] = out[label_col].astype(str).str.strip().str.lower()
 
@@ -42,15 +48,24 @@ def clean_unsw_labels(df: pd.DataFrame, mode: str = "multiclass") -> tuple[pd.Da
     out = df.copy()
     label_col = find_unsw_label_col(out)
 
-    out["label_raw"] = out[label_col].astype(str).fillna("Unknown").str.strip()
+    if label_col.lower() == "label" and "attack_cat" in out.columns:
+        label_col = "attack_cat"
+
+    out["label_raw"] = out[label_col].astype(str).fillna("Normal").str.strip()
+    out["label_raw"] = out["label_raw"].apply(normalize_unsw_attack_cat)
+
     if mode == "multiclass":
         out["label_clean"] = out["label_raw"]
+        label_map = {name: idx for idx, name in enumerate(UNSW_LABEL_ORDER)}
+        unknown = sorted(set(out["label_clean"].unique()) - set(label_map.keys()))
+        if unknown:
+            raise ValueError(f"UNSW-NB15 存在未映射标签: {unknown}")
     elif mode == "binary":
-        out["label_clean"] = out["label_raw"].apply(lambda x: "Normal" if x.lower() == "normal" else "Attack")
+        out["label_clean"] = out["label_raw"].apply(lambda x: "Normal" if str(x).lower() == "normal" else "Attack")
+        label_map = build_label_id_map(out["label_clean"])
     else:
         raise ValueError(f"Unsupported mode for UNSW-NB15: {mode}")
 
-    label_map = build_label_id_map(out["label_clean"])
     out["label_id"] = out["label_clean"].map(label_map)
     return out, label_map
 
@@ -77,6 +92,7 @@ def main() -> None:
     out_dir = ensure_dir(Path("data") / args.dataset / "processed")
     out_path = out_dir / f"{args.dataset}_labeled.parquet"
     out.to_parquet(out_path, index=False)
+
     save_json(label_map, Path("artifacts/metadata") / f"{args.dataset}_label_map.json")
 
     print(out[["label_raw", "label_clean", "label_id"]].head())

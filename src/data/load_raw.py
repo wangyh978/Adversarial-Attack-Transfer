@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 from pathlib import Path
+
 import pandas as pd
 
 from src.utils.logger import get_logger
@@ -33,17 +34,20 @@ def _find_files(raw_dir: Path, patterns: list[str]) -> list[Path]:
 def load_nsl_kdd(raw_dir: str | Path) -> pd.DataFrame:
     raw_dir = Path(raw_dir)
     files = _find_files(raw_dir, ["*.txt", "*.csv", "*.data"])
+
     if not files:
         raise FileNotFoundError(f"未在 {raw_dir} 下找到 NSL-KDD 原始文件")
 
     file_path = files[0]
     df = pd.read_csv(file_path, header=None)
+
     if df.shape[1] == 43:
         df.columns = NSL_KDD_COLUMNS
     elif df.shape[1] == 42:
         df.columns = NSL_KDD_COLUMNS[:-1]
     else:
         df.columns = [f"col_{i}" for i in range(df.shape[1])]
+
     df["dataset_name"] = "nsl_kdd"
     logger.info("Loaded NSL-KDD from %s shape=%s", file_path, df.shape)
     return df
@@ -51,20 +55,67 @@ def load_nsl_kdd(raw_dir: str | Path) -> pd.DataFrame:
 
 def load_unsw_nb15(raw_dir: str | Path) -> pd.DataFrame:
     raw_dir = Path(raw_dir)
-    csv_files = _find_files(raw_dir, ["*.csv"])
-    if not csv_files:
-        raise FileNotFoundError(f"未在 {raw_dir} 下找到 UNSW-NB15 原始 CSV 文件")
 
-    dfs = []
-    for fp in csv_files:
+    preferred_train = raw_dir / "UNSW_NB15_training-set.csv"
+    preferred_test = raw_dir / "UNSW_NB15_testing-set.csv"
+
+    def _smart_read_csv(fp: Path) -> pd.DataFrame:
+        # 先尝试默认逗号
         try:
-            dfs.append(pd.read_csv(fp))
+            df = pd.read_csv(fp)
         except UnicodeDecodeError:
-            dfs.append(pd.read_csv(fp, encoding="latin1"))
+            df = pd.read_csv(fp, encoding="latin1")
+
+        joined_cols = " ".join(map(str, df.columns))
+
+        # 注意这里必须是 "\t"，不是 "\\t"
+        if df.shape[1] <= 3 and "\t" in joined_cols:
+            try:
+                df = pd.read_csv(fp, sep="\t")
+            except UnicodeDecodeError:
+                df = pd.read_csv(fp, sep="\t", encoding="latin1")
+
+        return df
+
+
+    dfs: list[pd.DataFrame] = []
+
+    if preferred_train.exists() and preferred_test.exists():
+        train_df = _smart_read_csv(preferred_train)
+        test_df = _smart_read_csv(preferred_test)
+
+        train_df["split_source"] = "train_official"
+        test_df["split_source"] = "test_official"
+        dfs.extend([train_df, test_df])
+
+        logger.info(
+            "Loaded UNSW-NB15 official split from %s and %s",
+            preferred_train,
+            preferred_test,
+        )
+    else:
+        csv_files = _find_files(raw_dir, ["*.csv"])
+        if not csv_files:
+            raise FileNotFoundError(f"未在 {raw_dir} 下找到 UNSW-NB15 原始 CSV 文件")
+
+        for fp in csv_files:
+            df_part = _smart_read_csv(fp)
+
+            lower_name = fp.name.lower()
+            if "training" in lower_name or "train" in lower_name:
+                df_part["split_source"] = "train_official"
+            elif "testing" in lower_name or "test" in lower_name:
+                df_part["split_source"] = "test_official"
+            else:
+                df_part["split_source"] = "unknown"
+            dfs.append(df_part)
+
     df = pd.concat(dfs, axis=0, ignore_index=True)
     df["dataset_name"] = "unsw_nb15"
-    logger.info("Loaded UNSW-NB15 from %d files shape=%s", len(csv_files), df.shape)
+
+    logger.info("Loaded UNSW-NB15 shape=%s", df.shape)
     return df
+
 
 
 def parse_args():
