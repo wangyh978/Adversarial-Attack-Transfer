@@ -1,0 +1,4 @@
+*.npy 
+*.pkl 
+artifacts/models/ 
+data/unsw_nb15/processed/ 
