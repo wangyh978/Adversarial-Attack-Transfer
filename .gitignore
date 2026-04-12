@@ -1,4 +1,31 @@
-*.npy 
-*.pkl 
-artifacts/models/ 
-data/unsw_nb15/processed/ 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Generated artifacts
+artifacts/models/
+artifacts/preprocessors/
+artifacts/metadata/
+
+# Generated data
+data/*/processed/
+data/seeds/
+data/mixup/
+data/surrogate_train/
+data/adversarial/
+
+# Logs and results
+logs/
+results/tables/
+results/figures/
+results/reports/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

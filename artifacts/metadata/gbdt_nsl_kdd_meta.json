@@ -1,6 +1,0 @@
-{
-  "model_name": "gbdt",
-  "dataset": "nsl_kdd",
-  "model_path": "artifacts\\models\\gbdt_nsl_kdd.pkl",
-  "metrics_path": "results\\tables\\gbdt_nsl_kdd_metrics.json"
-}

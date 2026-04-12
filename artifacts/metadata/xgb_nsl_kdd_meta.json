@@ -1,6 +1,0 @@
-{
-  "model_name": "xgb",
-  "dataset": "nsl_kdd",
-  "model_path": "artifacts\\models\\xgb_nsl_kdd.pkl",
-  "metrics_path": "results\\tables\\xgb_nsl_kdd_metrics.json"
-}

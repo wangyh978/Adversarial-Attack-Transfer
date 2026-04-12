@@ -1,6 +1,0 @@
-{
-  "model_name": "tabnet",
-  "dataset": "unsw_nb15",
-  "model_path": "artifacts\\models\\tabnet_unsw_nb15.zip",
-  "metrics_path": "results\\tables\\tabnet_unsw_nb15_metrics.json"
-}
