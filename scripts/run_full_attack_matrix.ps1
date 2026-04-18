@@ -1,7 +1,7 @@
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [ValidateSet("nsl_kdd", "unsw_nb15")]
-    [string]$Dataset,
+    [string]$Dataset = "nsl_kdd",
 
     [Parameter(Mandatory=$false)]
     [string[]]$TargetModels = @(),
@@ -18,27 +18,13 @@ param(
     [Parameter(Mandatory=$false)]
     [string[]]$Attacks = @("fgm", "pgd", "slide"),
 
-    [Parameter(Mandatory=$false)]
+    [switch]$IncludePreparation,
     [switch]$IncludeTargetTraining,
-
-    [Parameter(Mandatory=$false)]
     [switch]$IncludeSurrogateTraining,
-
-    [Parameter(Mandatory=$false)]
     [switch]$ReuseExistingArtifacts
 )
 
 $ErrorActionPreference = "Stop"
-
-function Write-Stage {
-    param([string]$Message)
-
-    Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Cyan
-    Write-Host $Message -ForegroundColor Cyan
-    Write-Host "==================================================" -ForegroundColor Cyan
-    Write-Host ""
-}
 
 function Resolve-DefaultTargets {
     param([string]$DatasetName)
@@ -46,17 +32,30 @@ function Resolve-DefaultTargets {
     switch ($DatasetName) {
         "nsl_kdd"   { return @("tabnet", "xgb", "gbdt") }
         "unsw_nb15" { return @("xgb", "gbdt", "tabnet") }
-        default     { throw ("Unsupported dataset: {0}" -f $DatasetName) }
+        default     { throw "Unsupported dataset: $DatasetName" }
     }
 }
 
-function Get-TrainCommand {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel
-    )
+function Resolve-LabelMode {
+    param([string]$DatasetName)
 
-    return ("python -m src.training.train_target_model --dataset {0} --model {1}" -f $DatasetName, $TargetModel)
+    switch ($DatasetName) {
+        "nsl_kdd"   { return "5class" }
+        "unsw_nb15" { return "multiclass" }
+        default     { throw "Unsupported dataset: $DatasetName" }
+    }
+}
+
+function Invoke-Step {
+    param([string]$Command)
+
+    Write-Host ""
+    Write-Host ">> $Command" -ForegroundColor Cyan
+    Invoke-Expression $Command
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed: $Command"
+    }
 }
 
 function Invoke-TargetTraining {
@@ -65,190 +64,88 @@ function Invoke-TargetTraining {
         [string]$TargetModel
     )
 
-    Write-Host ("[Target] Training target model: {0}" -f $TargetModel) -ForegroundColor Yellow
-    $cmd = Get-TrainCommand -DatasetName $DatasetName -TargetModel $TargetModel
-    Invoke-Expression $cmd
+    switch ($TargetModel) {
+        "xgb" {
+            Invoke-Step "python -m src.models.train_xgb --dataset $DatasetName"
+        }
+        "gbdt" {
+            Invoke-Step "python -m src.models.train_gbdt --dataset $DatasetName"
+        }
+        "tabnet" {
+            Invoke-Step "python -m src.models.train_tabnet --dataset $DatasetName"
+        }
+        "random_forest" {
+            Invoke-Step "python -m src.models.train_sklearn_baseline --dataset $DatasetName --model random_forest"
+        }
+        default {
+            throw "Unsupported target model for training: $TargetModel"
+        }
+    }
 }
 
-function Invoke-SeedSetBuild {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue
-    )
-
-    Write-Host ("[Seed] build_seed_set | dataset={0} target={1} seed_size={2}" -f $DatasetName, $TargetModel, $SeedSizeValue) -ForegroundColor Yellow
-    python -m src.data.build_seed_set --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue
-}
-
-function Invoke-QuerySeedLabels {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue
-    )
-
-    Write-Host ("[Seed] query_seed_labels | dataset={0} target={1} seed_size={2}" -f $DatasetName, $TargetModel, $SeedSizeValue) -ForegroundColor Yellow
-    python -m src.data.query_seed_labels --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue
-}
-
-function Invoke-Mixup {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue
-    )
-
-    Write-Host ("[Mixup] run_mixup | dataset={0} target={1} seed_size={2} alpha={3}" -f $DatasetName, $TargetModel, $SeedSizeValue, $AlphaValue) -ForegroundColor Yellow
-    python -m src.data.run_mixup --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue --alpha $AlphaValue
-}
-
-function Invoke-BuildSurrogateTrainset {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue
-    )
-
-    Write-Host ("[Surrogate] build_surrogate_trainset | dataset={0} target={1} seed_size={2} alpha={3}" -f $DatasetName, $TargetModel, $SeedSizeValue, $AlphaValue) -ForegroundColor Yellow
-    python -m src.data.build_surrogate_trainset --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue --alpha $AlphaValue
-}
-
-function Invoke-SurrogateTraining {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue,
-        [int]$DepthValue
-    )
-
-    Write-Host ("[Surrogate] train_surrogate_model | dataset={0} target={1} seed_size={2} alpha={3} depth={4}" -f $DatasetName, $TargetModel, $SeedSizeValue, $AlphaValue, $DepthValue) -ForegroundColor Yellow
-    python -m src.training.train_surrogate_model --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue --alpha $AlphaValue --depth $DepthValue
-}
-
-function Invoke-SurrogateEvaluation {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue,
-        [int]$DepthValue
-    )
-
-    Write-Host ("[Surrogate] evaluate_surrogate_model | dataset={0} target={1} seed_size={2} alpha={3} depth={4}" -f $DatasetName, $TargetModel, $SeedSizeValue, $AlphaValue, $DepthValue) -ForegroundColor Yellow
-    python -m src.evaluation.evaluate_surrogate_model --dataset $DatasetName --target-model $TargetModel --seed-size $SeedSizeValue --alpha $AlphaValue --depth $DepthValue
-}
-
-function Invoke-GenerateFromSurrogate {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [string]$AttackName,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue,
-        [int]$DepthValue
-    )
-
-    Write-Host ("[Attack] generate_from_surrogate | dataset={0} target={1} attack={2}" -f $DatasetName, $TargetModel, $AttackName) -ForegroundColor Yellow
-    python -m src.attacks.generate_from_surrogate --dataset $DatasetName --target-model $TargetModel --attack $AttackName --seed-size $SeedSizeValue --alpha $AlphaValue --depth $DepthValue
-}
-
-function Invoke-AttackTarget {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel,
-        [string]$AttackName,
-        [int]$SeedSizeValue,
-        [double]$AlphaValue,
-        [int]$DepthValue
-    )
-
-    Write-Host ("[Transfer] attack_target | dataset={0} target={1} attack={2}" -f $DatasetName, $TargetModel, $AttackName) -ForegroundColor Yellow
-    python -m src.transfer.attack_target --dataset $DatasetName --target-model $TargetModel --attack $AttackName --seed-size $SeedSizeValue --alpha $AlphaValue --depth $DepthValue
-}
-
-function Invoke-SummarizeTransferMatrix {
-    param(
-        [string]$DatasetName,
-        [string]$TargetModel
-    )
-
-    Write-Host ("[Summary] summarize_transfer_matrix.py | dataset={0} target={1}" -f $DatasetName, $TargetModel) -ForegroundColor Yellow
-    python .\scripts\summarize_transfer_matrix.py --dataset $DatasetName --target-model $TargetModel
-}
-
-if ($null -eq $TargetModels -or $TargetModels.Count -eq 0) {
+if ($TargetModels.Count -eq 0) {
     $TargetModels = Resolve-DefaultTargets -DatasetName $Dataset
 }
 
-if (-not $ReuseExistingArtifacts) {
-    if (-not $PSBoundParameters.ContainsKey("IncludeTargetTraining")) {
-        $IncludeTargetTraining = $true
-    }
+$LabelMode = Resolve-LabelMode -DatasetName $Dataset
 
-    if (-not $PSBoundParameters.ContainsKey("IncludeSurrogateTraining")) {
-        $IncludeSurrogateTraining = $true
-    }
+if (
+    -not $ReuseExistingArtifacts `
+    -and -not $IncludePreparation `
+    -and -not $IncludeTargetTraining `
+    -and -not $IncludeSurrogateTraining
+) {
+    $IncludeTargetTraining = $true
+    $IncludeSurrogateTraining = $true
+
+    Write-Host ""
+    Write-Host "[safe-default] No include switches were provided." -ForegroundColor Yellow
+    Write-Host "[safe-default] Automatically enabling target + surrogate retraining." -ForegroundColor Yellow
+    Write-Host "[safe-default] Use -ReuseExistingArtifacts if you really want to reuse old checkpoints." -ForegroundColor Yellow
 }
 
-Write-Stage ("Full Attack Matrix | dataset = {0}" -f $Dataset)
-Write-Host ("Target models : {0}" -f ($TargetModels -join ", ")) -ForegroundColor Magenta
-Write-Host ("Attacks       : {0}" -f ($Attacks -join ", ")) -ForegroundColor Magenta
-Write-Host ("Seed size     : {0}" -f $SeedSize) -ForegroundColor Magenta
-Write-Host ("Alpha         : {0}" -f $Alpha) -ForegroundColor Magenta
-Write-Host ("Depth         : {0}" -f $Depth) -ForegroundColor Magenta
-Write-Host ("Reuse existing: {0}" -f $ReuseExistingArtifacts) -ForegroundColor Magenta
-Write-Host ("Train target  : {0}" -f $IncludeTargetTraining) -ForegroundColor Magenta
-Write-Host ("Train surro   : {0}" -f $IncludeSurrogateTraining) -ForegroundColor Magenta
+Write-Host "Dataset : $Dataset" -ForegroundColor Yellow
+Write-Host "TargetModels : $($TargetModels -join ', ')" -ForegroundColor Yellow
+Write-Host "SeedSize : $SeedSize" -ForegroundColor Yellow
+Write-Host "Alpha : $Alpha" -ForegroundColor Yellow
+Write-Host "Depth : $Depth" -ForegroundColor Yellow
+Write-Host "Attacks : $($Attacks -join ', ')" -ForegroundColor Yellow
+Write-Host "Preparation : $IncludePreparation" -ForegroundColor Yellow
+Write-Host "TrainTarget : $IncludeTargetTraining" -ForegroundColor Yellow
+Write-Host "TrainSurr : $IncludeSurrogateTraining" -ForegroundColor Yellow
+Write-Host "ReuseOnly : $ReuseExistingArtifacts" -ForegroundColor Yellow
+
+if ($IncludePreparation) {
+    Invoke-Step "python -m src.data.load_raw --dataset $Dataset"
+    Invoke-Step "python -m src.data.clean_labels --dataset $Dataset --mode $LabelMode"
+    Invoke-Step "python -m src.data.split_data --dataset $Dataset"
+    Invoke-Step "python -m src.preprocess.run_preprocess_pipeline --dataset $Dataset"
+}
 
 foreach ($target in $TargetModels) {
-    Write-Stage ("Processing target model: {0}" -f $target)
+    Write-Host ""
+    Write-Host "==== Target: $target ====" -ForegroundColor Magenta
 
     if ($IncludeTargetTraining) {
         Invoke-TargetTraining -DatasetName $Dataset -TargetModel $target
-    } else {
-        Write-Host ("[Skip] target training for {0}" -f $target) -ForegroundColor DarkYellow
     }
-
-    Invoke-SeedSetBuild -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize
-    Invoke-QuerySeedLabels -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize
-    Invoke-Mixup -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize -AlphaValue $Alpha
-    Invoke-BuildSurrogateTrainset -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize -AlphaValue $Alpha
 
     if ($IncludeSurrogateTraining) {
-        Invoke-SurrogateTraining -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize -AlphaValue $Alpha -DepthValue $Depth
-    } else {
-        Write-Host ("[Skip] surrogate training for {0}" -f $target) -ForegroundColor DarkYellow
+        Invoke-Step "python -m src.data.build_seed_set --dataset $Dataset --seed_size $SeedSize"
+        Invoke-Step "python -m src.data.query_seed_labels --dataset $Dataset --target_model $target --seed_size $SeedSize"
+        Invoke-Step "python -m src.augment.run_mixup --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha"
+        Invoke-Step "python -m src.data.build_surrogate_trainset --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha"
+        Invoke-Step "python -m src.models.train_surrogate_mlp --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth"
+        Invoke-Step "python -m src.evaluation.evaluate_surrogate --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth"
     }
-
-    Invoke-SurrogateEvaluation -DatasetName $Dataset -TargetModel $target -SeedSizeValue $SeedSize -AlphaValue $Alpha -DepthValue $Depth
 
     foreach ($attack in $Attacks) {
-        Write-Stage ("Target = {0} | Attack = {1}" -f $target, $attack)
-
-        Invoke-GenerateFromSurrogate `
-            -DatasetName $Dataset `
-            -TargetModel $target `
-            -AttackName $attack `
-            -SeedSizeValue $SeedSize `
-            -AlphaValue $Alpha `
-            -DepthValue $Depth
-
-        Invoke-AttackTarget `
-            -DatasetName $Dataset `
-            -TargetModel $target `
-            -AttackName $attack `
-            -SeedSizeValue $SeedSize `
-            -AlphaValue $Alpha `
-            -DepthValue $Depth
+        Invoke-Step "python -m src.transfer.generate_from_surrogate --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth --attack $attack"
+        Invoke-Step "python -m src.transfer.attack_target --dataset $Dataset --target_model $target --seed_size $SeedSize --alpha $Alpha --depth $Depth --attack $attack"
     }
 
-    Invoke-SummarizeTransferMatrix -DatasetName $Dataset -TargetModel $target
+    Invoke-Step "python scripts/summarize_transfer_matrix.py --dataset $Dataset --target-model $target"
 }
 
 Write-Host ""
-Write-Host "[DONE] Full attack matrix completed." -ForegroundColor Green
-Write-Host ""
+Write-Host "Full attack matrix pipeline finished." -ForegroundColor Green

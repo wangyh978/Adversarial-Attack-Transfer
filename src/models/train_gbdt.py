@@ -1,13 +1,16 @@
 from __future__ import annotations
-
 from argparse import ArgumentParser
 from pathlib import Path
 import time
+
 import joblib
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier
 
-from src.evaluation.classification_metrics import compute_classification_metrics, save_metrics
+from src.evaluation.classification_metrics import (
+    compute_classification_metrics,
+    save_metrics,
+)
 from src.models.predict import predict_labels
 from src.models.save_model_metadata import save_model_metadata
 
@@ -32,11 +35,18 @@ def main() -> None:
     args = parse_args()
     data = load_feature_bundle(args.dataset)
 
+    print(f"[GBDT] dataset={args.dataset}", flush=True)
+    print(f"[GBDT] X_train={data['X_train'].shape}, y_train={data['y_train'].shape}", flush=True)
+    print("[GBDT] training started...", flush=True)
+
     model = GradientBoostingClassifier(random_state=42)
 
     start = time.time()
     model.fit(data["X_train"], data["y_train"])
     train_time = time.time() - start
+
+    print(f"[GBDT] training finished in {train_time:.2f}s", flush=True)
+    print("[GBDT] evaluating...", flush=True)
 
     y_pred = predict_labels(model, data["X_test"])
     metrics = compute_classification_metrics(data["y_test"], y_pred)
@@ -49,12 +59,18 @@ def main() -> None:
 
     metrics_path = Path("results/tables") / f"gbdt_{args.dataset}_metrics.json"
     save_metrics(metrics, metrics_path)
+
     save_model_metadata(
-        {"model_name": "gbdt", "dataset": args.dataset, "model_path": str(model_path), "metrics_path": str(metrics_path)},
+        {
+            "model_name": "gbdt",
+            "dataset": args.dataset,
+            "model_path": str(model_path),
+            "metrics_path": str(metrics_path),
+        },
         Path("artifacts/metadata") / f"gbdt_{args.dataset}_meta.json",
     )
 
-    print(metrics["accuracy"], metrics["f1_macro"])
+    print(f"[GBDT] accuracy={metrics['accuracy']:.6f} f1_macro={metrics['f1_macro']:.6f}", flush=True)
 
 
 if __name__ == "__main__":

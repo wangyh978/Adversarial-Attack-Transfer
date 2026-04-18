@@ -35,7 +35,6 @@ function Get-PrimaryTarget {
     if ($null -eq $TargetModels -or $TargetModels.Count -eq 0) {
         throw "TargetModels is empty."
     }
-
     return $TargetModels[0]
 }
 
@@ -44,17 +43,38 @@ Write-Stage ("UNSW-NB15 Pipeline | Stage = {0}" -f $Stage)
 switch ($Stage) {
     "Prepare" {
         Write-Stage "Step 1/1: Prepare UNSW-NB15 dataset"
-        python -m src.data.clean_unsw_nb15
-        python -m src.features.preprocess --dataset unsw_nb15
+        python -m src.data.load_raw --dataset unsw_nb15
+        python -m src.data.clean_labels --dataset unsw_nb15 --mode multiclass
+        python -m src.data.split_data --dataset unsw_nb15
+        python -m src.preprocess.run_preprocess_pipeline --dataset unsw_nb15
         break
     }
 
     "Baseline" {
-        Write-Stage "Step 1/1: Train baseline target models for UNSW-NB15"
+        Write-Stage "Step 1/2: Prepare dataset"
+        python -m src.data.load_raw --dataset unsw_nb15
+        python -m src.data.clean_labels --dataset unsw_nb15 --mode multiclass
+        python -m src.data.split_data --dataset unsw_nb15
+        python -m src.preprocess.run_preprocess_pipeline --dataset unsw_nb15
+
+        Write-Stage "Step 2/2: Train baseline target models"
         foreach ($target in $TargetModels) {
-            Write-Host ("[Baseline] Training target model: {0}" -f $target) -ForegroundColor Yellow
-            python -m src.training.train_target_model --dataset unsw_nb15 --model $target
+            switch ($target) {
+                "xgb" {
+                    python -m src.models.train_xgb --dataset unsw_nb15
+                }
+                "gbdt" {
+                    python -m src.models.train_gbdt --dataset unsw_nb15
+                }
+                "tabnet" {
+                    python -m src.models.train_tabnet --dataset unsw_nb15
+                }
+                default {
+                    throw "Unsupported target model: $target"
+                }
+            }
         }
+        python -m src.reporting.compare_models --dataset unsw_nb15
         break
     }
 
@@ -71,7 +91,6 @@ switch ($Stage) {
             -Attacks @() `
             -SkipDataPreparation `
             -SkipTargetTraining
-
         break
     }
 
@@ -86,7 +105,6 @@ switch ($Stage) {
             -Alpha $Alpha `
             -Depth $Depth `
             -Attacks $Attacks
-
         break
     }
 
@@ -99,23 +117,15 @@ switch ($Stage) {
             -SeedSize $SeedSize `
             -Alpha $Alpha `
             -Depth $Depth `
-            -Attacks $Attacks
-
+            -Attacks $Attacks `
+            -IncludeTargetTraining `
+            -IncludeSurrogateTraining
         break
     }
 
     "FullPipeline" {
-        Write-Stage "Step 1/3: Prepare dataset"
-        python -m src.data.clean_unsw_nb15
-        python -m src.features.preprocess --dataset unsw_nb15
+        Write-Stage "Step 1/1: Run full pipeline for UNSW-NB15"
 
-        Write-Stage "Step 2/3: Train target models"
-        foreach ($target in $TargetModels) {
-            Write-Host ("[FullPipeline] Training target model: {0}" -f $target) -ForegroundColor Yellow
-            python -m src.training.train_target_model --dataset unsw_nb15 --model $target
-        }
-
-        Write-Stage "Step 3/3: Run full attack matrix"
         .\scripts\run_full_attack_matrix.ps1 `
             -Dataset unsw_nb15 `
             -TargetModels $TargetModels `
@@ -123,8 +133,9 @@ switch ($Stage) {
             -Alpha $Alpha `
             -Depth $Depth `
             -Attacks $Attacks `
-            -ReuseExistingArtifacts
-
+            -IncludePreparation `
+            -IncludeTargetTraining `
+            -IncludeSurrogateTraining
         break
     }
 
@@ -139,7 +150,6 @@ switch ($Stage) {
             -Depth $Depth `
             -Attacks $Attacks `
             -ReuseExistingArtifacts
-
         break
     }
 
