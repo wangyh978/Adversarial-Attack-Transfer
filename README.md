@@ -203,15 +203,7 @@ python -m src.transfer.attack_target --dataset unsw_nb15 --target_model xgb --se
 
 ## 🔹 NSL-KDD（Full Attack Matrix）
 
-### target = TabNet（已有结果）
-
-| attack | transfer |
-|--------|---------:|
-| FGM    | 0.061 |
-| PGD    | 0.402 |
-| SLIDE  | 0.402 |
-
-### target = GBDT（本次新结果）
+### target = GBDT
 
 ```text
 FGM   = 0.2578
