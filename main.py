@@ -1,65 +1,485 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Unified experiment entrypoint for Adversarial-Attack-Transfer.
+
+This version is aligned with the repository structure discussed in the
+conversation history and also integrates the later paper-style MSM changes:
+
+- src.augment.run_mixup
+- src.data.build_surrogate_trainset
+- src.models.train_surrogate_mlp
+
+Instead of relying on PowerShell orchestration, this file becomes the primary
+CLI entrypoint for:
+- NSL-KDD / UNSW-NB15 data preparation
+- baseline training
+- surrogate pipeline
+- transfer attack evaluation
+- optional MSM iterative rounds
+
+Notes:
+- Safe-by-default: unless --reuse-existing-artifacts is explicitly provided,
+  target models and surrogate models are retrained in full pipeline stages.
+- Argument names passed to downstream modules use the repository's underscore
+  style, e.g. --target_model, --seed_size.
+"""
+
 from __future__ import annotations
 
-from argparse import ArgumentParser
+import argparse
+import shlex
 import subprocess
 import sys
+from pathlib import Path
+from typing import Iterable, List
+
+ROOT = Path(__file__).resolve().parent
 
 
-TASK_TO_SCRIPT = {
-    "check_env": "src/utils/check_env.py",
-    "load_data": "src/data/load_raw.py",
-    "clean_labels": "src/data/clean_labels.py",
-    "split_data": "src/data/split_data.py",
-    "preprocess": "src/preprocess/run_preprocess_pipeline.py",
-    "train_sklearn": "src/models/train_sklearn_baseline.py",
-    "train_xgb": "src/models/train_xgb.py",
-    "train_gbdt": "src/models/train_gbdt.py",
-    "train_tabnet": "src/models/train_tabnet.py",
-    "query_api": "src/blackbox/query_api.py",
-    "build_seed_set": "src/data/build_seed_set.py",
-    "query_seed_labels": "src/data/query_seed_labels.py",
-    "run_mixup": "src/augment/run_mixup.py",
-    "train_surrogate": "src/models/train_surrogate_mlp.py",
-    "eval_surrogate": "src/evaluation/evaluate_surrogate.py",
-    "run_surrogate_ablation": "src/models/run_surrogate_ablation.py",
-    "compare_models": "src/reporting/compare_models.py",
+DATASET_ALIASES = {
+    "nsl": "nsl_kdd",
+    "nsl_kdd": "nsl_kdd",
+    "unsw": "unsw_nb15",
+    "unsw_nb15": "unsw_nb15",
 }
 
+DEFAULT_TARGETS = {
+    "nsl_kdd": ["tabnet", "xgb", "gbdt"],
+    "unsw_nb15": ["xgb", "gbdt", "tabnet"],
+}
 
-def build_parser() -> ArgumentParser:
-    parser = ArgumentParser(description="NIDS adversarial robustness project")
-    parser.add_argument("--task", required=True, choices=sorted(TASK_TO_SCRIPT))
-    parser.add_argument("--dataset", default="nsl_kdd", choices=["nsl_kdd", "unsw_nb15"])
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--target_model", default="tabnet")
-    parser.add_argument("--mode", default=None)
-    parser.add_argument("--seed_size", type=int, default=None)
-    parser.add_argument("--alpha", type=float, default=None)
-    parser.add_argument("--depth", type=int, default=None)
+DEFAULT_ATTACKS = ["fgm", "pgd", "slide"]
+
+
+def print_header(title: str) -> None:
+    print("\n" + "=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+def run_cmd(cmd: List[str], cwd: Path | None = None) -> None:
+    print(f"\n>> {' '.join(shlex.quote(x) for x in cmd)}")
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def run_module(module: str, *args: str) -> None:
+    run_cmd([sys.executable, "-m", module, *args], cwd=ROOT)
+
+
+def run_script(script_relpath: str, *args: str) -> None:
+    script_path = ROOT / script_relpath
+    if not script_path.exists():
+        raise FileNotFoundError(f"Script not found: {script_path}")
+    run_cmd([sys.executable, str(script_path), *args], cwd=ROOT)
+
+
+def normalize_dataset(name: str) -> str:
+    key = name.strip().lower()
+    if key not in DATASET_ALIASES:
+        raise SystemExit(f"Unsupported dataset: {name}")
+    return DATASET_ALIASES[key]
+
+
+def label_mode_for(dataset: str) -> str:
+    return "5class" if dataset == "nsl_kdd" else "multiclass"
+
+
+def default_targets_for(dataset: str) -> List[str]:
+    return list(DEFAULT_TARGETS[dataset])
+
+
+def resolve_targets(dataset: str, args: argparse.Namespace) -> List[str]:
+    if args.target:
+        return [args.target]
+    if args.targets:
+        return list(args.targets)
+    return default_targets_for(dataset)
+
+
+def resolve_attacks(args: argparse.Namespace) -> List[str]:
+    return list(args.attacks) if args.attacks else list(DEFAULT_ATTACKS)
+
+
+def prepare_dataset(dataset: str) -> None:
+    print_header(f"Prepare dataset: {dataset}")
+    mode = label_mode_for(dataset)
+    run_module("src.data.load_raw", "--dataset", dataset)
+    run_module("src.data.clean_labels", "--dataset", dataset, "--mode", mode)
+    run_module("src.data.split_data", "--dataset", dataset)
+    run_module("src.preprocess.run_preprocess_pipeline", "--dataset", dataset)
+
+
+def train_target_model(dataset: str, target: str) -> None:
+    module_map = {
+        "xgb": "src.models.train_xgb",
+        "gbdt": "src.models.train_gbdt",
+        "tabnet": "src.models.train_tabnet",
+    }
+    if target not in module_map:
+        raise SystemExit(f"Unsupported target model: {target}")
+
+    print_header(f"Train target model: dataset={dataset} target={target}")
+    run_module(module_map[target], "--dataset", dataset)
+
+
+def compare_baseline(dataset: str) -> None:
+    print_header(f"Compare baseline models: {dataset}")
+    run_module("src.reporting.compare_models", "--dataset", dataset)
+
+
+def build_paper_style_surrogate(
+    dataset: str,
+    target: str,
+    seed_size: int,
+    alpha: float,
+    depth: int,
+) -> None:
+    """
+    Integrated paper-style surrogate pipeline:
+    queried seed -> mixup -> black-box relabel -> hard-label surrogate training
+    """
+    print_header(
+        f"Build surrogate: dataset={dataset} target={target} "
+        f"seed_size={seed_size} alpha={alpha} depth={depth}"
+    )
+    run_module(
+        "src.data.build_seed_set",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+    )
+    run_module(
+        "src.data.query_seed_labels",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+    )
+    run_module(
+        "src.augment.run_mixup",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+    )
+    run_module(
+        "src.data.build_surrogate_trainset",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+    )
+    run_module(
+        "src.models.train_surrogate_mlp",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+        "--depth", str(depth),
+    )
+    run_module(
+        "src.evaluation.evaluate_surrogate",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+        "--depth", str(depth),
+    )
+
+
+def run_attack_pair(
+    dataset: str,
+    target: str,
+    attack: str,
+    seed_size: int,
+    alpha: float,
+    depth: int,
+) -> None:
+    print_header(
+        f"Transfer attack: dataset={dataset} target={target} attack={attack}"
+    )
+    run_module(
+        "src.transfer.generate_from_surrogate",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+        "--depth", str(depth),
+        "--attack", attack,
+    )
+    run_module(
+        "src.transfer.attack_target",
+        "--dataset", dataset,
+        "--target_model", target,
+        "--seed_size", str(seed_size),
+        "--alpha", str(alpha),
+        "--depth", str(depth),
+        "--attack", attack,
+    )
+
+
+def summarize_target(dataset: str, target: str) -> None:
+    print_header(f"Summarize transfer matrix: dataset={dataset} target={target}")
+    run_script(
+        "scripts/summarize_transfer_matrix.py",
+        "--dataset", dataset,
+        "--target-model", target,
+    )
+
+
+def min_transfer(
+    dataset: str,
+    target: str,
+    attacks: Iterable[str],
+    seed_size: int,
+    alpha: float,
+    depth: int,
+    include_prepare: bool = False,
+    include_target_training: bool = False,
+) -> None:
+    if include_prepare:
+        prepare_dataset(dataset)
+    if include_target_training:
+        train_target_model(dataset, target)
+
+    build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+    for attack in attacks:
+        run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+    summarize_target(dataset, target)
+
+
+def full_attack_matrix(
+    dataset: str,
+    targets: Iterable[str],
+    attacks: Iterable[str],
+    seed_size: int,
+    alpha: float,
+    depth: int,
+    reuse_existing_artifacts: bool,
+    include_prepare: bool = False,
+) -> None:
+    if include_prepare:
+        prepare_dataset(dataset)
+
+    for target in targets:
+        if not reuse_existing_artifacts:
+            train_target_model(dataset, target)
+            build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+        else:
+            print_header(
+                f"Reuse existing artifacts: dataset={dataset} target={target}"
+            )
+
+        for attack in attacks:
+            run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+        summarize_target(dataset, target)
+
+
+def msm_iterative(
+    dataset: str,
+    target: str,
+    attacks: Iterable[str],
+    seed_size: int,
+    alpha: float,
+    depth: int,
+    rounds: int,
+    include_prepare: bool = False,
+    include_target_training: bool = False,
+) -> None:
+    """
+    Integrates the iterative idea directly into main.py so an extra pipeline
+    wrapper file is no longer required.
+    """
+    if rounds < 1:
+        raise SystemExit("--rounds must be >= 1")
+
+    if include_prepare:
+        prepare_dataset(dataset)
+    if include_target_training:
+        train_target_model(dataset, target)
+
+    for i in range(1, rounds + 1):
+        print_header(
+            f"MSM iterative round {i}/{rounds}: dataset={dataset} target={target}"
+        )
+        build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+        for attack in attacks:
+            run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+
+    summarize_target(dataset, target)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Unified entrypoint for NIDS adversarial transfer experiments."
+    )
+    parser.add_argument(
+        "dataset",
+        choices=["nsl", "nsl_kdd", "unsw", "unsw_nb15"],
+        help="Dataset alias or full dataset name.",
+    )
+    parser.add_argument(
+        "--stage",
+        default="min_transfer",
+        choices=[
+            "prepare",
+            "baseline",
+            "compare_baseline",
+            "surrogate",
+            "min_transfer",
+            "full_attack_matrix",
+            "full_pipeline",
+            "reuse_artifacts",
+            "msm_iterative",
+        ],
+        help="Pipeline stage to run.",
+    )
+    parser.add_argument(
+        "--target",
+        choices=["xgb", "gbdt", "tabnet"],
+        help="Single target model for single-target stages.",
+    )
+    parser.add_argument(
+        "--targets",
+        nargs="+",
+        choices=["xgb", "gbdt", "tabnet"],
+        help="Multiple target models for matrix/full stages.",
+    )
+    parser.add_argument(
+        "--attacks",
+        nargs="+",
+        choices=["fgm", "pgd", "mim", "ti", "cw", "slide"],
+        default=None,
+        help="Attack methods to run.",
+    )
+    parser.add_argument("--seed-size", type=int, default=1000)
+    parser.add_argument("--alpha", type=float, default=0.1)
+    parser.add_argument("--depth", type=int, default=3)
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=3,
+        help="Iteration rounds for --stage msm_iterative.",
+    )
+    parser.add_argument(
+        "--reuse-existing-artifacts",
+        action="store_true",
+        help="Reuse saved target/surrogate artifacts instead of safe retraining.",
+    )
     return parser
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    script = TASK_TO_SCRIPT[args.task]
+    parser = build_parser()
+    args = parser.parse_args()
 
-    cmd = [sys.executable, script, "--dataset", args.dataset]
+    dataset = normalize_dataset(args.dataset)
+    targets = resolve_targets(dataset, args)
+    attacks = resolve_attacks(args)
 
-    if args.model:
-        cmd += ["--model", args.model]
-    if args.mode:
-        cmd += ["--mode", args.mode]
-    if args.target_model:
-        cmd += ["--target_model", args.target_model]
-    if args.seed_size is not None:
-        cmd += ["--seed_size", str(args.seed_size)]
-    if args.alpha is not None:
-        cmd += ["--alpha", str(args.alpha)]
-    if args.depth is not None:
-        cmd += ["--depth", str(args.depth)]
+    print_header("Resolved configuration")
+    print(f"dataset = {dataset}")
+    print(f"stage = {args.stage}")
+    print(f"targets = {targets}")
+    print(f"seed_size = {args.seed_size}")
+    print(f"alpha = {args.alpha}")
+    print(f"depth = {args.depth}")
+    print(f"attacks = {attacks}")
+    print(f"rounds = {args.rounds}")
+    print(f"reuse_existing_artifacts = {args.reuse_existing_artifacts}")
 
-    print("RUN:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    if args.stage == "prepare":
+        prepare_dataset(dataset)
+        return
+
+    if args.stage == "baseline":
+        for target in targets:
+            train_target_model(dataset, target)
+        return
+
+    if args.stage == "compare_baseline":
+        compare_baseline(dataset)
+        return
+
+    if args.stage == "surrogate":
+        target = targets[0]
+        build_paper_style_surrogate(
+            dataset, target, args.seed_size, args.alpha, args.depth
+        )
+        return
+
+    if args.stage == "min_transfer":
+        target = targets[0]
+        min_transfer(
+            dataset=dataset,
+            target=target,
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            include_prepare=False,
+            include_target_training=not args.reuse_existing_artifacts,
+        )
+        return
+
+    if args.stage == "full_attack_matrix":
+        full_attack_matrix(
+            dataset=dataset,
+            targets=targets,
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            reuse_existing_artifacts=args.reuse_existing_artifacts,
+            include_prepare=False,
+        )
+        return
+
+    if args.stage == "full_pipeline":
+        full_attack_matrix(
+            dataset=dataset,
+            targets=targets,
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            reuse_existing_artifacts=False,
+            include_prepare=True,
+        )
+        return
+
+    if args.stage == "reuse_artifacts":
+        full_attack_matrix(
+            dataset=dataset,
+            targets=targets,
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            reuse_existing_artifacts=True,
+            include_prepare=False,
+        )
+        return
+
+    if args.stage == "msm_iterative":
+        target = targets[0]
+        msm_iterative(
+            dataset=dataset,
+            target=target,
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            rounds=args.rounds,
+            include_prepare=False,
+            include_target_training=not args.reuse_existing_artifacts,
+        )
+        return
+
+    raise SystemExit(f"Unsupported stage: {args.stage}")
 
 
 if __name__ == "__main__":
