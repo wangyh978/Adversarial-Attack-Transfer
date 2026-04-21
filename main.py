@@ -4,26 +4,21 @@
 """
 Unified experiment entrypoint for Adversarial-Attack-Transfer.
 
-This version is aligned with the repository structure discussed in the
-conversation history and also integrates the later paper-style MSM changes:
+This version restores the full transfer-attack pipeline with FGM / PGD / SLIDE,
+while keeping the MSM-style mixup surrogate path as the default surrogate route.
 
-- src.augment.run_mixup
-- src.data.build_surrogate_trainset
-- src.models.train_surrogate_mlp
+Main capabilities:
+- dataset preparation
+- target model training
+- MSM mixup surrogate pipeline
+- transfer attack generation and evaluation
+- multi-target full attack matrix
+- iterative MSM workflow
 
-Instead of relying on PowerShell orchestration, this file becomes the primary
-CLI entrypoint for:
-- NSL-KDD / UNSW-NB15 data preparation
-- baseline training
-- surrogate pipeline
-- transfer attack evaluation
-- optional MSM iterative rounds
-
-Notes:
-- Safe-by-default: unless --reuse-existing-artifacts is explicitly provided,
-  target models and surrogate models are retrained in full pipeline stages.
-- Argument names passed to downstream modules use the repository's underscore
-  style, e.g. --target_model, --seed_size.
+Design notes:
+- All downstream calls use `python -m ...` so `src.*` imports work reliably.
+- Safe by default: unless `--reuse-existing-artifacts` is set, target and
+  surrogate artifacts are retrained in stages that need them.
 """
 
 from __future__ import annotations
@@ -36,7 +31,6 @@ from pathlib import Path
 from typing import Iterable, List
 
 ROOT = Path(__file__).resolve().parent
-
 
 DATASET_ALIASES = {
     "nsl": "nsl_kdd",
@@ -61,7 +55,7 @@ def print_header(title: str) -> None:
 
 def run_cmd(cmd: List[str], cwd: Path | None = None) -> None:
     print(f"\n>> {' '.join(shlex.quote(x) for x in cmd)}")
-    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else str(ROOT))
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 
@@ -131,32 +125,42 @@ def compare_baseline(dataset: str) -> None:
     run_module("src.reporting.compare_models", "--dataset", dataset)
 
 
-def build_paper_style_surrogate(
+def build_msm_surrogate(
     dataset: str,
     target: str,
     seed_size: int,
     alpha: float,
     depth: int,
+    *,
+    include_eval: bool = True,
 ) -> None:
     """
-    Integrated paper-style surrogate pipeline:
-    queried seed -> mixup -> black-box relabel -> hard-label surrogate training
+    MSM-style surrogate path:
+      build_seed_set
+      -> query_seed_labels
+      -> run_mixup
+      -> build_surrogate_trainset
+      -> train_surrogate_mlp
+      -> evaluate_surrogate (optional)
     """
     print_header(
-        f"Build surrogate: dataset={dataset} target={target} "
+        f"Build MSM surrogate: dataset={dataset} target={target} "
         f"seed_size={seed_size} alpha={alpha} depth={depth}"
     )
+
     run_module(
         "src.data.build_seed_set",
         "--dataset", dataset,
         "--seed_size", str(seed_size),
     )
+
     run_module(
         "src.data.query_seed_labels",
         "--dataset", dataset,
         "--target_model", target,
         "--seed_size", str(seed_size),
     )
+
     run_module(
         "src.augment.run_mixup",
         "--dataset", dataset,
@@ -164,6 +168,7 @@ def build_paper_style_surrogate(
         "--seed_size", str(seed_size),
         "--alpha", str(alpha),
     )
+
     run_module(
         "src.data.build_surrogate_trainset",
         "--dataset", dataset,
@@ -171,6 +176,7 @@ def build_paper_style_surrogate(
         "--seed_size", str(seed_size),
         "--alpha", str(alpha),
     )
+
     run_module(
         "src.models.train_surrogate_mlp",
         "--dataset", dataset,
@@ -179,17 +185,19 @@ def build_paper_style_surrogate(
         "--alpha", str(alpha),
         "--depth", str(depth),
     )
-    run_module(
-        "src.evaluation.evaluate_surrogate",
-        "--dataset", dataset,
-        "--target_model", target,
-        "--seed_size", str(seed_size),
-        "--alpha", str(alpha),
-        "--depth", str(depth),
-    )
+
+    if include_eval:
+        run_module(
+            "src.evaluation.evaluate_surrogate",
+            "--dataset", dataset,
+            "--target_model", target,
+            "--seed_size", str(seed_size),
+            "--alpha", str(alpha),
+            "--depth", str(depth),
+        )
 
 
-def run_attack_pair(
+def generate_attack_from_surrogate(
     dataset: str,
     target: str,
     attack: str,
@@ -198,7 +206,8 @@ def run_attack_pair(
     depth: int,
 ) -> None:
     print_header(
-        f"Transfer attack: dataset={dataset} target={target} attack={attack}"
+        f"Generate adversarial samples from surrogate | "
+        f"dataset={dataset} target={target} attack={attack}"
     )
     run_module(
         "src.transfer.generate_from_surrogate",
@@ -208,6 +217,20 @@ def run_attack_pair(
         "--alpha", str(alpha),
         "--depth", str(depth),
         "--attack", attack,
+    )
+
+
+def evaluate_attack_on_target(
+    dataset: str,
+    target: str,
+    attack: str,
+    seed_size: int,
+    alpha: float,
+    depth: int,
+) -> None:
+    print_header(
+        f"Evaluate transfer on target | dataset={dataset} "
+        f"target={target} attack={attack}"
     )
     run_module(
         "src.transfer.attack_target",
@@ -220,12 +243,63 @@ def run_attack_pair(
     )
 
 
+def run_attack_pair(
+    dataset: str,
+    target: str,
+    attack: str,
+    seed_size: int,
+    alpha: float,
+    depth: int,
+) -> None:
+    generate_attack_from_surrogate(
+        dataset=dataset,
+        target=target,
+        attack=attack,
+        seed_size=seed_size,
+        alpha=alpha,
+        depth=depth,
+    )
+    evaluate_attack_on_target(
+        dataset=dataset,
+        target=target,
+        attack=attack,
+        seed_size=seed_size,
+        alpha=alpha,
+        depth=depth,
+    )
+
+
 def summarize_target(dataset: str, target: str) -> None:
     print_header(f"Summarize transfer matrix: dataset={dataset} target={target}")
     run_script(
         "scripts/summarize_transfer_matrix.py",
         "--dataset", dataset,
         "--target-model", target,
+    )
+
+
+def surrogate_only(
+    dataset: str,
+    target: str,
+    seed_size: int,
+    alpha: float,
+    depth: int,
+    *,
+    include_prepare: bool = False,
+    include_target_training: bool = False,
+) -> None:
+    if include_prepare:
+        prepare_dataset(dataset)
+    if include_target_training:
+        train_target_model(dataset, target)
+
+    build_msm_surrogate(
+        dataset=dataset,
+        target=target,
+        seed_size=seed_size,
+        alpha=alpha,
+        depth=depth,
+        include_eval=True,
     )
 
 
@@ -236,6 +310,7 @@ def min_transfer(
     seed_size: int,
     alpha: float,
     depth: int,
+    *,
     include_prepare: bool = False,
     include_target_training: bool = False,
 ) -> None:
@@ -244,7 +319,29 @@ def min_transfer(
     if include_target_training:
         train_target_model(dataset, target)
 
-    build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+    build_msm_surrogate(
+        dataset=dataset,
+        target=target,
+        seed_size=seed_size,
+        alpha=alpha,
+        depth=depth,
+        include_eval=True,
+    )
+
+    for attack in attacks:
+        run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+
+    summarize_target(dataset, target)
+
+
+def transfer_only(
+    dataset: str,
+    target: str,
+    attacks: Iterable[str],
+    seed_size: int,
+    alpha: float,
+    depth: int,
+) -> None:
     for attack in attacks:
         run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
     summarize_target(dataset, target)
@@ -257,6 +354,7 @@ def full_attack_matrix(
     seed_size: int,
     alpha: float,
     depth: int,
+    *,
     reuse_existing_artifacts: bool,
     include_prepare: bool = False,
 ) -> None:
@@ -266,7 +364,14 @@ def full_attack_matrix(
     for target in targets:
         if not reuse_existing_artifacts:
             train_target_model(dataset, target)
-            build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+            build_msm_surrogate(
+                dataset=dataset,
+                target=target,
+                seed_size=seed_size,
+                alpha=alpha,
+                depth=depth,
+                include_eval=True,
+            )
         else:
             print_header(
                 f"Reuse existing artifacts: dataset={dataset} target={target}"
@@ -274,6 +379,7 @@ def full_attack_matrix(
 
         for attack in attacks:
             run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+
         summarize_target(dataset, target)
 
 
@@ -285,13 +391,10 @@ def msm_iterative(
     alpha: float,
     depth: int,
     rounds: int,
+    *,
     include_prepare: bool = False,
     include_target_training: bool = False,
 ) -> None:
-    """
-    Integrates the iterative idea directly into main.py so an extra pipeline
-    wrapper file is no longer required.
-    """
     if rounds < 1:
         raise SystemExit("--rounds must be >= 1")
 
@@ -304,7 +407,15 @@ def msm_iterative(
         print_header(
             f"MSM iterative round {i}/{rounds}: dataset={dataset} target={target}"
         )
-        build_paper_style_surrogate(dataset, target, seed_size, alpha, depth)
+        build_msm_surrogate(
+            dataset=dataset,
+            target=target,
+            seed_size=seed_size,
+            alpha=alpha,
+            depth=depth,
+            include_eval=True,
+        )
+
         for attack in attacks:
             run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
 
@@ -317,6 +428,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "dataset",
+        nargs="?",
+        default="nsl_kdd",
         choices=["nsl", "nsl_kdd", "unsw", "unsw_nb15"],
         help="Dataset alias or full dataset name.",
     )
@@ -328,6 +441,9 @@ def build_parser() -> argparse.ArgumentParser:
             "baseline",
             "compare_baseline",
             "surrogate",
+            "generate_attack",
+            "attack_target",
+            "transfer_only",
             "min_transfer",
             "full_attack_matrix",
             "full_pipeline",
@@ -350,19 +466,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--attacks",
         nargs="+",
-        choices=["fgm", "pgd", "mim", "ti", "cw", "slide"],
+        choices=["fgm", "pgd", "slide", "mim", "ti", "cw"],
         default=None,
-        help="Attack methods to run.",
+        help="Attack methods to run. Default: fgm pgd slide.",
     )
     parser.add_argument("--seed-size", type=int, default=1000)
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--depth", type=int, default=3)
-    parser.add_argument(
-        "--rounds",
-        type=int,
-        default=3,
-        help="Iteration rounds for --stage msm_iterative.",
-    )
+    parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument(
         "--reuse-existing-artifacts",
         action="store_true",
@@ -404,17 +515,57 @@ def main() -> None:
         return
 
     if args.stage == "surrogate":
-        target = targets[0]
-        build_paper_style_surrogate(
-            dataset, target, args.seed_size, args.alpha, args.depth
+        surrogate_only(
+            dataset=dataset,
+            target=targets[0],
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
+            include_prepare=False,
+            include_target_training=not args.reuse_existing_artifacts,
+        )
+        return
+
+    if args.stage == "generate_attack":
+        for attack in attacks:
+            generate_attack_from_surrogate(
+                dataset=dataset,
+                target=targets[0],
+                attack=attack,
+                seed_size=args.seed_size,
+                alpha=args.alpha,
+                depth=args.depth,
+            )
+        return
+
+    if args.stage == "attack_target":
+        for attack in attacks:
+            evaluate_attack_on_target(
+                dataset=dataset,
+                target=targets[0],
+                attack=attack,
+                seed_size=args.seed_size,
+                alpha=args.alpha,
+                depth=args.depth,
+            )
+        summarize_target(dataset, targets[0])
+        return
+
+    if args.stage == "transfer_only":
+        transfer_only(
+            dataset=dataset,
+            target=targets[0],
+            attacks=attacks,
+            seed_size=args.seed_size,
+            alpha=args.alpha,
+            depth=args.depth,
         )
         return
 
     if args.stage == "min_transfer":
-        target = targets[0]
         min_transfer(
             dataset=dataset,
-            target=target,
+            target=targets[0],
             attacks=attacks,
             seed_size=args.seed_size,
             alpha=args.alpha,
@@ -464,10 +615,9 @@ def main() -> None:
         return
 
     if args.stage == "msm_iterative":
-        target = targets[0]
         msm_iterative(
             dataset=dataset,
-            target=target,
+            target=targets[0],
             attacks=attacks,
             seed_size=args.seed_size,
             alpha=args.alpha,
