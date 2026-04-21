@@ -2,7 +2,7 @@
 
 基于 **MSM hard-label mixup** 的网络入侵检测黑盒迁移对抗攻击研究框架。
 
-本项目面向河南大学开放性课题 **《网络入侵检测中基于黑盒迁移的 AI 模型对抗攻击研究》**，研究目标是构建一套可复现、可扩展的 **NIDS（Network Intrusion Detection System）对抗鲁棒性评估流程**，用于系统分析不同目标模型在黑盒迁移攻击下的脆弱性，并为正式部署前的安全评估提供实验依据。
+研究目标是构建一套可复现、可扩展的 **NIDS（Network Intrusion Detection System）对抗鲁棒性评估流程**，用于系统分析不同目标模型在黑盒迁移攻击下的脆弱性，并为正式部署前的安全评估提供实验依据。
 
 ---
 
@@ -319,6 +319,7 @@ python main.py nsl --stage msm_iterative --target xgb --seed-size 1000 --alpha 0
 - 对 `tabnet` 的 surrogate agreement 约 `0.8661`
 
 说明在 UNSW-NB15 上 surrogate 仍有较大优化空间，尤其是：
+
 - 多分类不均衡问题更明显
 - surrogate 的 macro-F1 仍偏低
 - 但在黑盒迁移攻击上已经能产生较强效果
@@ -438,41 +439,7 @@ results/tables/final_transfer_matrix_<dataset>_<target>.md
 
 ---
 
-## 15. 建议忽略的运行产物
-
-建议 `.gitignore` 忽略下列目录：
-
-```gitignore
-__pycache__/
-artifacts/models/
-artifacts/preprocessors/
-artifacts/metadata/
-data/*/processed/
-data/seeds/
-data/mixup/
-data/surrogate_train/
-data/adversarial/
-logs/
-results/tables/
-results/figures/
-results/reports/
-```
-
-建议长期保留并维护的目录：
-
-```text
-src/
-scripts/
-configs/
-README.md
-requirements.txt
-main.py
-docs/
-```
-
----
-
-## 16. 当前项目状态总结
+## 15. 当前项目状态总结
 
 当前项目已经不再处于“代码是否能跑通”的早期阶段，而是进入了：
 
@@ -506,7 +473,7 @@ docs/
 
 ---
 
-## 17. 研究价值与预期成果衔接
+## 16. 研究价值与预期成果衔接
 
 申请书明确提出，项目预期形成：
 
@@ -524,6 +491,6 @@ docs/
 
 ---
 
-## 18. 一句话总结
+## 17. 一句话总结
 
 本项目当前已经初步实现了一个面向 NIDS 的、基于 **MSM hard-label mixup** 的黑盒迁移攻击评估框架，并在 `NSL-KDD` 与 `UNSW-NB15` 上完成了多目标模型的系统实验，为后续的鲁棒性分析、论文写作与结题验收提供了可复现的技术基础。
