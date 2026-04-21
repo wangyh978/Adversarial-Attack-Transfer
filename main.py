@@ -149,7 +149,6 @@ def build_paper_style_surrogate(
     run_module(
         "src.data.build_seed_set",
         "--dataset", dataset,
-        "--target_model", target,
         "--seed_size", str(seed_size),
     )
     run_module(
