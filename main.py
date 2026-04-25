@@ -1,24 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 Unified experiment entrypoint for Adversarial-Attack-Transfer.
 
-This version restores the full transfer-attack pipeline with FGM / PGD / SLIDE,
-while keeping the MSM-style mixup surrogate path as the default surrogate route.
-
-Main capabilities:
+Includes:
 - dataset preparation
 - target model training
-- MSM mixup surrogate pipeline
+- MSM hard-label mixup surrogate pipeline
 - transfer attack generation and evaluation
 - multi-target full attack matrix
 - iterative MSM workflow
-
-Design notes:
-- All downstream calls use `python -m ...` so `src.*` imports work reliably.
-- Safe by default: unless `--reuse-existing-artifacts` is set, target and
-  surrogate artifacts are retrained in stages that need them.
+- surrogate hyperparameter sweep
+- result report generation
 """
 
 from __future__ import annotations
@@ -78,6 +71,10 @@ def normalize_dataset(name: str) -> str:
     return DATASET_ALIASES[key]
 
 
+def dataset_alias_for(dataset: str) -> str:
+    return "nsl" if dataset == "nsl_kdd" else "unsw"
+
+
 def label_mode_for(dataset: str) -> str:
     return "5class" if dataset == "nsl_kdd" else "multiclass"
 
@@ -115,7 +112,6 @@ def train_target_model(dataset: str, target: str) -> None:
     }
     if target not in module_map:
         raise SystemExit(f"Unsupported target model: {target}")
-
     print_header(f"Train target model: dataset={dataset} target={target}")
     run_module(module_map[target], "--dataset", dataset)
 
@@ -134,33 +130,21 @@ def build_msm_surrogate(
     *,
     include_eval: bool = True,
 ) -> None:
-    """
-    MSM-style surrogate path:
-      build_seed_set
-      -> query_seed_labels
-      -> run_mixup
-      -> build_surrogate_trainset
-      -> train_surrogate_mlp
-      -> evaluate_surrogate (optional)
-    """
     print_header(
         f"Build MSM surrogate: dataset={dataset} target={target} "
         f"seed_size={seed_size} alpha={alpha} depth={depth}"
     )
-
     run_module(
         "src.data.build_seed_set",
         "--dataset", dataset,
         "--seed_size", str(seed_size),
     )
-
     run_module(
         "src.data.query_seed_labels",
         "--dataset", dataset,
         "--target_model", target,
         "--seed_size", str(seed_size),
     )
-
     run_module(
         "src.augment.run_mixup",
         "--dataset", dataset,
@@ -168,7 +152,6 @@ def build_msm_surrogate(
         "--seed_size", str(seed_size),
         "--alpha", str(alpha),
     )
-
     run_module(
         "src.data.build_surrogate_trainset",
         "--dataset", dataset,
@@ -176,7 +159,6 @@ def build_msm_surrogate(
         "--seed_size", str(seed_size),
         "--alpha", str(alpha),
     )
-
     run_module(
         "src.models.train_surrogate_mlp",
         "--dataset", dataset,
@@ -185,7 +167,6 @@ def build_msm_surrogate(
         "--alpha", str(alpha),
         "--depth", str(depth),
     )
-
     if include_eval:
         run_module(
             "src.evaluation.evaluate_surrogate",
@@ -292,7 +273,6 @@ def surrogate_only(
         prepare_dataset(dataset)
     if include_target_training:
         train_target_model(dataset, target)
-
     build_msm_surrogate(
         dataset=dataset,
         target=target,
@@ -327,10 +307,8 @@ def min_transfer(
         depth=depth,
         include_eval=True,
     )
-
     for attack in attacks:
         run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
-
     summarize_target(dataset, target)
 
 
@@ -373,13 +351,10 @@ def full_attack_matrix(
                 include_eval=True,
             )
         else:
-            print_header(
-                f"Reuse existing artifacts: dataset={dataset} target={target}"
-            )
+            print_header(f"Reuse existing artifacts: dataset={dataset} target={target}")
 
         for attack in attacks:
             run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
-
         summarize_target(dataset, target)
 
 
@@ -415,11 +390,45 @@ def msm_iterative(
             depth=depth,
             include_eval=True,
         )
-
         for attack in attacks:
             run_attack_pair(dataset, target, attack, seed_size, alpha, depth)
+        summarize_target(dataset, target)
 
-    summarize_target(dataset, target)
+
+def run_surrogate_sweep_stage(
+    dataset: str,
+    targets: List[str],
+    attacks: List[str],
+    args: argparse.Namespace,
+) -> None:
+    cmd = [
+        "--dataset", dataset,
+        "--targets", *targets,
+        "--seed-sizes", *[str(x) for x in args.seed_sizes],
+        "--alphas", *[str(x) for x in args.alphas],
+        "--depths", *[str(x) for x in args.depths],
+        "--attacks", *attacks,
+        "--stage", args.sweep_stage,
+    ]
+
+    if args.core_only:
+        cmd.append("--core-only")
+    if args.summary_csv:
+        cmd.extend(["--summary-csv", args.summary_csv])
+    if args.dry_run:
+        cmd.append("--dry-run")
+    if args.stop_on_error:
+        cmd.append("--stop-on-error")
+    if args.retrain_targets:
+        cmd.append("--retrain-targets")
+    if args.run_report:
+        cmd.append("--run-report")
+
+    run_script("scripts/run_surrogate_sweep.py", *cmd)
+
+
+def run_report_stage() -> None:
+    run_script("scripts/build_result_report.py")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -449,6 +458,8 @@ def build_parser() -> argparse.ArgumentParser:
             "full_pipeline",
             "reuse_artifacts",
             "msm_iterative",
+            "surrogate_sweep",
+            "report",
         ],
         help="Pipeline stage to run.",
     )
@@ -461,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--targets",
         nargs="+",
         choices=["xgb", "gbdt", "tabnet"],
-        help="Multiple target models for matrix/full stages.",
+        help="Multiple target models for matrix/full/sweep stages.",
     )
     parser.add_argument(
         "--attacks",
@@ -477,8 +488,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reuse-existing-artifacts",
         action="store_true",
-        help="Reuse saved target/surrogate artifacts instead of safe retraining.",
+        help="Reuse saved target/surrogate artifacts instead of retraining in selected stages.",
     )
+
+    # surrogate_sweep options
+    parser.add_argument("--seed-sizes", nargs="+", default=["500", "1000", "2000"])
+    parser.add_argument("--alphas", nargs="+", default=["0.05", "0.1", "0.2"])
+    parser.add_argument("--depths", nargs="+", default=["3", "4", "5"])
+    parser.add_argument(
+        "--sweep-stage",
+        default="min_transfer",
+        choices=["min_transfer", "full_attack_matrix", "reuse_artifacts"],
+        help="Internal stage used by surrogate_sweep. Default is min_transfer.",
+    )
+    parser.add_argument("--core-only", action="store_true")
+    parser.add_argument("--summary-csv", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument(
+        "--retrain-targets",
+        action="store_true",
+        help="During surrogate_sweep, retrain target models for every config. Usually not recommended.",
+    )
+    parser.add_argument(
+        "--run-report",
+        action="store_true",
+        help="Run scripts/build_result_report.py after surrogate_sweep.",
+    )
+
     return parser
 
 
@@ -626,6 +663,14 @@ def main() -> None:
             include_prepare=False,
             include_target_training=not args.reuse_existing_artifacts,
         )
+        return
+
+    if args.stage == "surrogate_sweep":
+        run_surrogate_sweep_stage(dataset, targets, attacks, args)
+        return
+
+    if args.stage == "report":
+        run_report_stage()
         return
 
     raise SystemExit(f"Unsupported stage: {args.stage}")

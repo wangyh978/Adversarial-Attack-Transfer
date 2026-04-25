@@ -15,20 +15,6 @@ def ensure_dirs():
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_final_matrices():
-    files = sorted(TABLES_DIR.glob("final_transfer_matrix_*.csv"))
-    if not files:
-        raise FileNotFoundError("No final_transfer_matrix_*.csv found in results/tables")
-
-    frames = []
-    for f in files:
-        df = pd.read_csv(f)
-        df["source_file"] = f.name
-        frames.append(df)
-
-    return pd.concat(frames, ignore_index=True)
-
-
 def load_metric_jsons():
     files = sorted(TABLES_DIR.glob("transfer_*_metrics.json"))
     if not files:
@@ -60,32 +46,16 @@ def load_metric_jsons():
             "max_l2_perturbation": data.get("max_l2_perturbation"),
             "mean_linf_perturbation": data.get("mean_linf_perturbation"),
             "max_linf_perturbation": data.get("max_linf_perturbation"),
-            "l2_q0.5": data.get("l2_q0.5"),
-            "linf_q0.5": data.get("linf_q0.5"),
-            "l2_q0.9": data.get("l2_q0.9"),
-            "linf_q0.9": data.get("linf_q0.9"),
-            "l2_q0.95": data.get("l2_q0.95"),
-            "linf_q0.95": data.get("linf_q0.95"),
             "l2_q0.99": data.get("l2_q0.99"),
             "linf_q0.99": data.get("linf_q0.99"),
             "l2_q0.999": data.get("l2_q0.999"),
             "linf_q0.999": data.get("linf_q0.999"),
             "num_linf_gt_1": data.get("num_linf_gt_1"),
             "num_l2_gt_5": data.get("num_l2_gt_5"),
-            "metric_definition": data.get("metric_definition"),
             "metric_file": f.name,
         })
 
     return pd.DataFrame(rows)
-
-
-def safe_float(value, default=0.0):
-    try:
-        if value is None or pd.isna(value):
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def save_markdown_table(df, path):
@@ -113,25 +83,7 @@ def plot_bar(df, value_col, title, ylabel, filename):
     plt.close()
 
 
-def plot_grouped_by_dataset_attack(df, value_col, filename, title):
-    pivot = df.pivot_table(
-        index=["dataset", "target_model"],
-        columns="attack",
-        values=value_col,
-        aggfunc="mean",
-    )
-
-    ax = pivot.plot(kind="bar", figsize=(12, 6))
-    ax.set_title(title)
-    ax.set_ylabel(value_col)
-    ax.set_xlabel("Dataset / Target Model")
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(PLOTS_DIR / filename, dpi=200)
-    plt.close()
-
-
-def plot_heatmap_like(df, value_col, filename, title):
+def plot_heatmap(df, value_col, filename, title):
     pivot = df.pivot_table(
         index=["dataset", "target_model"],
         columns="attack",
@@ -141,7 +93,6 @@ def plot_heatmap_like(df, value_col, filename, title):
 
     fig, ax = plt.subplots(figsize=(8, 5))
     im = ax.imshow(pivot.values, aspect="auto")
-
     ax.set_xticks(range(len(pivot.columns)))
     ax.set_xticklabels(pivot.columns)
     ax.set_yticks(range(len(pivot.index)))
@@ -162,186 +113,95 @@ def plot_heatmap_like(df, value_col, filename, title):
 
 def build_summary_text(df):
     df = df.copy()
-    df["transfer_success_rate"] = pd.to_numeric(df["transfer_success_rate"], errors="coerce")
-    df["accuracy_drop"] = pd.to_numeric(df["accuracy_drop"], errors="coerce")
-    df["macro_f1_drop"] = pd.to_numeric(df["macro_f1_drop"], errors="coerce")
+    numeric_cols = [
+        "transfer_success_rate", "accuracy_drop", "macro_f1_drop",
+        "mean_l2_perturbation", "linf_q0.999", "num_linf_gt_1", "num_l2_gt_5"
+    ]
+    for c in numeric_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    best_attack = df.sort_values("transfer_success_rate", ascending=False).iloc[0]
-    best_by_dataset = (
-        df.sort_values("transfer_success_rate", ascending=False)
-        .groupby("dataset", dropna=False)
-        .head(1)
-    )
+    best = df.sort_values("transfer_success_rate", ascending=False).iloc[0]
+    best_by_dataset = df.sort_values("transfer_success_rate", ascending=False).groupby("dataset").head(1)
+    best_by_target = df.sort_values("transfer_success_rate", ascending=False).groupby(["dataset", "target_model"]).head(1)
+    attack_rank = df.groupby("attack", as_index=False)["transfer_success_rate"].mean().sort_values("transfer_success_rate", ascending=False)
 
-    best_by_target = (
-        df.sort_values("transfer_success_rate", ascending=False)
-        .groupby(["dataset", "target_model"], dropna=False)
-        .head(1)
-    )
-
-    attack_avg = (
-        df.groupby("attack", dropna=False)["transfer_success_rate"]
-        .mean()
-        .sort_values(ascending=False)
-        .reset_index()
-    )
-
-    anomaly_df = df[
-        (pd.to_numeric(df["num_linf_gt_1"], errors="coerce").fillna(0) > 0)
-        | (pd.to_numeric(df["num_l2_gt_5"], errors="coerce").fillna(0) > 0)
-    ].copy()
+    anomaly_df = df[(df["num_linf_gt_1"].fillna(0) > 0) | (df["num_l2_gt_5"].fillna(0) > 0)]
 
     lines = []
-    lines.append("# Transfer Attack Result Summary\n")
+    lines.append("# MSM Transfer Attack Result Summary\n")
     lines.append("## Overall conclusion\n")
     lines.append(
-        f"- Strongest setting: `{best_attack['dataset']} / {best_attack['target_model']} / {best_attack['attack']}`, "
-        f"transfer success rate = `{safe_float(best_attack['transfer_success_rate']):.4f}`."
-    )
-    lines.append(
-        f"- Average strongest attack type: `{attack_avg.iloc[0]['attack']}`, "
-        f"mean transfer success rate = `{safe_float(attack_avg.iloc[0]['transfer_success_rate']):.4f}`."
+        f"- Best result: `{best['dataset']} / {best['target_model']} / {best['attack']}`, "
+        f"transfer_success_rate = `{best['transfer_success_rate']:.4f}`."
     )
 
     lines.append("\n## Best attack per dataset\n")
     for _, r in best_by_dataset.iterrows():
-        lines.append(
-            f"- `{r['dataset']}`: `{r['attack']}` on `{r['target_model']}`, "
-            f"transfer success rate = `{safe_float(r['transfer_success_rate']):.4f}`."
-        )
+        lines.append(f"- `{r['dataset']}`: `{r['target_model']} / {r['attack']}` = `{r['transfer_success_rate']:.4f}`")
 
     lines.append("\n## Best attack per target model\n")
     for _, r in best_by_target.iterrows():
         lines.append(
-            f"- `{r['dataset']} / {r['target_model']}`: best attack = `{r['attack']}`, "
-            f"transfer success rate = `{safe_float(r['transfer_success_rate']):.4f}`, "
-            f"accuracy drop = `{safe_float(r['accuracy_drop']):.4f}`, "
-            f"macro-F1 drop = `{safe_float(r['macro_f1_drop']):.4f}`."
+            f"- `{r['dataset']} / {r['target_model']}`: `{r['attack']}`, "
+            f"transfer = `{r['transfer_success_rate']:.4f}`, "
+            f"accuracy_drop = `{r['accuracy_drop']:.4f}`, "
+            f"macro_f1_drop = `{r['macro_f1_drop']:.4f}`"
         )
 
     lines.append("\n## Attack average ranking\n")
-    lines.append(attack_avg.to_markdown(index=False))
+    lines.append(attack_rank.to_markdown(index=False))
 
     lines.append("\n## Perturbation anomaly check\n")
     if anomaly_df.empty:
-        lines.append("- No perturbation anomaly detected under `linf > 1` or `l2 > 5`.")
+        lines.append("- No anomaly found under `linf > 1` or `l2 > 5`.")
     else:
+        keep = [
+            "dataset", "target_model", "attack",
+            "max_l2_perturbation", "max_linf_perturbation",
+            "l2_q0.999", "linf_q0.999", "num_linf_gt_1", "num_l2_gt_5",
+        ]
         lines.append(
-            "- Some adversarial files contain extreme perturbation samples. "
-            "Because the 99.9% quantiles are much smaller than the maximum values, "
-            "the anomaly is concentrated in a small number of samples rather than the whole attack set."
+            "- Some extreme perturbation samples exist. Since high quantiles are much smaller than maxima, "
+            "these are concentrated outliers rather than global perturbation inflation."
         )
         lines.append("")
-        keep_cols = [
-            "dataset",
-            "target_model",
-            "attack",
-            "max_l2_perturbation",
-            "max_linf_perturbation",
-            "l2_q0.999",
-            "linf_q0.999",
-            "num_linf_gt_1",
-            "num_l2_gt_5",
-        ]
-        lines.append(anomaly_df[keep_cols].to_markdown(index=False))
+        lines.append(anomaly_df[keep].to_markdown(index=False))
 
-    lines.append("\n## Suggested wording for paper/report\n")
+    lines.append("\n## Suggested report wording\n")
     lines.append(
         "> Most adversarial samples are constrained within a reasonable perturbation range. "
-        "However, a small number of samples show unusually large maximum L2/Linf perturbations, "
-        "which may be caused by feature normalization boundaries, inverse-scaling artifacts, or extreme original feature values. "
-        "Therefore, this study reports both maximum perturbation and high-quantile perturbation statistics "
-        "to avoid overestimating the global perturbation magnitude."
+        "A small number of samples show unusually large maximum L2/Linf perturbations, "
+        "likely caused by normalization boundaries, inverse-scaling artifacts, or extreme original feature values. "
+        "Therefore, both maximum perturbation and high-quantile perturbation statistics are reported."
     )
-
-    lines.append("\n## Generated files\n")
-    lines.append("- `results/summary/all_transfer_matrix.csv`")
-    lines.append("- `results/summary/all_transfer_matrix.md`")
-    lines.append("- `results/summary/all_metrics_detail.csv`")
-    lines.append("- `results/summary/result_summary.md`")
-    lines.append("- `results/summary/plots/transfer_success_rate_bar.png`")
-    lines.append("- `results/summary/plots/accuracy_drop_bar.png`")
-    lines.append("- `results/summary/plots/macro_f1_drop_bar.png`")
-    lines.append("- `results/summary/plots/transfer_success_rate_grouped.png`")
-    lines.append("- `results/summary/plots/transfer_success_rate_heatmap.png`")
-    lines.append("- `results/summary/plots/perturbation_linf_999.png`")
 
     return "\n".join(lines)
 
 
 def main():
     ensure_dirs()
-
-    _ = load_final_matrices()
-    metrics_df = load_metric_jsons()
-
-    metrics_df = metrics_df.sort_values(
-        ["dataset", "target_model", "attack"]
-    ).reset_index(drop=True)
+    df = load_metric_jsons()
+    df = df.sort_values(["dataset", "target_model", "attack"]).reset_index(drop=True)
 
     all_csv = SUMMARY_DIR / "all_transfer_matrix.csv"
     all_md = SUMMARY_DIR / "all_transfer_matrix.md"
-    metrics_csv = SUMMARY_DIR / "all_metrics_detail.csv"
+    summary_md = SUMMARY_DIR / "result_summary.md"
 
-    metrics_df.to_csv(metrics_csv, index=False, encoding="utf-8-sig")
-    metrics_df.to_csv(all_csv, index=False, encoding="utf-8-sig")
-    save_markdown_table(metrics_df, all_md)
+    df.to_csv(all_csv, index=False, encoding="utf-8-sig")
+    save_markdown_table(df, all_md)
 
-    plot_bar(
-        metrics_df,
-        "transfer_success_rate",
-        "Transfer Success Rate",
-        "Transfer Success Rate",
-        "transfer_success_rate_bar.png",
-    )
+    plot_bar(df, "transfer_success_rate", "Transfer Success Rate", "Transfer Success Rate", "transfer_success_rate_bar.png")
+    plot_bar(df, "accuracy_drop", "Accuracy Drop", "Accuracy Drop", "accuracy_drop_bar.png")
+    plot_bar(df, "macro_f1_drop", "Macro-F1 Drop", "Macro-F1 Drop", "macro_f1_drop_bar.png")
+    plot_bar(df, "linf_q0.999", "99.9% Linf Perturbation", "Linf q0.999", "perturbation_linf_999.png")
+    plot_heatmap(df, "transfer_success_rate", "transfer_success_rate_heatmap.png", "Transfer Success Rate Heatmap")
 
-    plot_bar(
-        metrics_df,
-        "accuracy_drop",
-        "Accuracy Drop",
-        "Accuracy Drop",
-        "accuracy_drop_bar.png",
-    )
-
-    plot_bar(
-        metrics_df,
-        "macro_f1_drop",
-        "Macro-F1 Drop",
-        "Macro-F1 Drop",
-        "macro_f1_drop_bar.png",
-    )
-
-    plot_bar(
-        metrics_df,
-        "linf_q0.999",
-        "99.9% Linf Perturbation",
-        "Linf q0.999",
-        "perturbation_linf_999.png",
-    )
-
-    plot_grouped_by_dataset_attack(
-        metrics_df,
-        "transfer_success_rate",
-        "transfer_success_rate_grouped.png",
-        "Transfer Success Rate by Dataset and Target Model",
-    )
-
-    plot_heatmap_like(
-        metrics_df,
-        "transfer_success_rate",
-        "transfer_success_rate_heatmap.png",
-        "Transfer Success Rate Heatmap",
-    )
-
-    summary_text = build_summary_text(metrics_df)
-    summary_path = SUMMARY_DIR / "result_summary.md"
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write(summary_text)
+    with open(summary_md, "w", encoding="utf-8") as f:
+        f.write(build_summary_text(df))
 
     print(f"saved: {all_csv}")
     print(f"saved: {all_md}")
-    print(f"saved: {metrics_csv}")
-    print(f"saved: {summary_path}")
+    print(f"saved: {summary_md}")
     print(f"saved plots to: {PLOTS_DIR}")
 
 
