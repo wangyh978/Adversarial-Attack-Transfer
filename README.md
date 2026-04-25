@@ -406,7 +406,7 @@ python main.py --stage report
 results/summary/plots/
 ```
 
-README 中可直接展示以下图：
+
 
 ### 11.1 迁移成功率柱状图
 
