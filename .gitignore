@@ -44,3 +44,14 @@ logs/
 results/tables/
 results/figures/
 results/reports/
+*.pyc
+*.pyo
+*.pyd
+
+.venv/
+.env
+
+results/
+data/adversarial/
+artifacts/models/
+*.log
