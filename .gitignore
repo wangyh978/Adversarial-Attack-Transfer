@@ -3,55 +3,27 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Virtual environments
 .venv/
 venv/
+.env
 
-# Generated artifacts
+# Generated experiment artifacts
 artifacts/models/
 artifacts/preprocessors/
 artifacts/metadata/
-
-# Generated data
 data/*/processed/
 data/seeds/
 data/mixup/
 data/surrogate_train/
 data/adversarial/
-
-# Logs and results
 logs/
-results/tables/
-results/figures/
-results/reports/
+results/
+*.log
 
 # OS / IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-
-
-__pycache__/
-artifacts/models/
-artifacts/preprocessors/
-artifacts/metadata/
-data/*/processed/
-data/seeds/
-data/mixup/
-data/surrogate_train/
-data/adversarial/
-logs/
-results/tables/
-results/figures/
-results/reports/
-*.pyc
-*.pyo
-*.pyd
-
-.venv/
-.env
-
-results/
-data/adversarial/
-artifacts/models/
-*.log

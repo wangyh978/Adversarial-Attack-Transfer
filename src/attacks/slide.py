@@ -5,15 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from src.attacks.base import AttackBase
-from src.attacks.common import load_feature_bounds, clip_to_bounds
-
-
-def _project_l2(delta: torch.Tensor, epsilon: float, eps: float = 1e-12) -> torch.Tensor:
-    """Project per-sample perturbations into an L2 ball."""
-    flat = delta.view(delta.size(0), -1)
-    norm = torch.norm(flat, p=2, dim=1, keepdim=True).clamp_min(eps)
-    scale = torch.clamp(torch.tensor(epsilon, dtype=delta.dtype, device=delta.device) / norm, max=1.0)
-    return (flat * scale).view_as(delta)
+from src.attacks.common import clip_to_bounds, project_l2_ball, random_l2_noise_like
 
 
 def _masked_l2_normalize(grad: torch.Tensor, mask: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -54,10 +46,11 @@ class SLIDEAttack(AttackBase):
         topk_ratio: float = 0.25,
         random_start: bool = True,
         seed: int = 2026,
+        batch_size: int = 2048,
     ):
         if not (0.0 < topk_ratio <= 1.0):
             raise ValueError("topk_ratio must be in (0, 1].")
-        self.dataset = dataset
+        super().__init__(dataset=dataset, batch_size=batch_size)
         self.epsilon = float(epsilon)
         self.steps = int(steps)
         self.step_size = float(step_size)
@@ -73,39 +66,31 @@ class SLIDEAttack(AttackBase):
         mask.scatter_(1, idx, 1.0)
         return mask
 
-    def generate(self, model, X, y, **kwargs):
-        device = next(model.parameters()).device
-        x_orig = torch.tensor(X, dtype=torch.float32, device=device)
-        y_t = torch.tensor(y, dtype=torch.long, device=device)
-
-        min_v, max_v = load_feature_bounds(self.dataset)
-        min_v = min_v.to(device)
-        max_v = max_v.to(device)
-
+    def _generate_batch(self, model, x_orig, y_t, min_v, max_v, **kwargs):
         x_adv = x_orig.clone().detach()
 
         if self.random_start and self.epsilon > 0:
-            generator = torch.Generator(device=device)
+            generator = torch.Generator(device=x_orig.device)
             generator.manual_seed(self.seed)
-            noise = torch.randn(x_orig.shape, generator=generator, device=device, dtype=x_orig.dtype)
-            noise = _project_l2(noise, self.epsilon)
+            noise = random_l2_noise_like(x_orig, self.epsilon, generator=generator)
             x_adv = clip_to_bounds(x_orig + noise, min_v, max_v).detach()
 
         for _ in range(self.steps):
             x_adv.requires_grad_(True)
             logits = model(x_adv)
             loss = F.cross_entropy(logits, y_t)
-            loss.backward()
-
-            grad = x_adv.grad
+            grad = torch.autograd.grad(loss, x_adv)[0]
             mask = self._topk_mask(grad)
             direction = _masked_l2_normalize(grad, mask)
 
             x_next = x_adv.detach() + self.step_size * direction
-            delta = _project_l2(x_next - x_orig, self.epsilon)
+            delta = project_l2_ball(x_next - x_orig, self.epsilon)
             x_adv = clip_to_bounds(x_orig + delta, min_v, max_v).detach()
 
-        return x_adv.cpu().numpy().astype(np.float32), {
+        return x_adv
+
+    def metadata(self) -> dict:
+        return {
             "attack_name": "slide",
             "epsilon": self.epsilon,
             "steps": self.steps,
@@ -114,4 +99,5 @@ class SLIDEAttack(AttackBase):
             "random_start": self.random_start,
             "seed": self.seed,
             "implementation_note": "Sparse L2 iterative tabular SLIDE; not a PGD alias.",
+            "batch_size": self.batch_size,
         }

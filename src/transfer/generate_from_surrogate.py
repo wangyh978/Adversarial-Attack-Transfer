@@ -1,123 +1,114 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser
-from pathlib import Path
+import argparse
 import json
-import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.model_selection import train_test_split
 
+from src.attacks.registry import (
+    SUPPORTED_ATTACKS,
+    attack_overrides_from_args,
+    build_attack,
+    default_attack_kwargs,
+)
 from src.models.mlp_surrogate import MLPSurrogate
+from src.transfer.experiment import (
+    adversarial_dir,
+    adversarial_stem,
+    resolve_surrogate_config,
+    surrogate_model_path,
+)
 from src.utils.io import load_json
-
-from src.attacks.fgm import FGMAttack
-from src.attacks.pgd import PGDAttack
-from src.attacks.mim import MIMAttack
-from src.attacks.ti import TIAttack
-from src.attacks.cw import CWAttack
-from src.attacks.slide import SLIDEAttack
-
-
-ATTACKS = {
-    "fgm": FGMAttack,
-    "pgd": PGDAttack,
-    "mim": MIMAttack,
-    "ti": TIAttack,
-    "cw": CWAttack,
-    "slide": SLIDEAttack,
-}
 
 
 def parse_args():
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required=True, choices=["nsl_kdd", "unsw_nb15"])
     parser.add_argument("--target_model", required=True, choices=["tabnet", "xgb", "gbdt"])
-    parser.add_argument("--attack", required=True, choices=sorted(ATTACKS))
+    parser.add_argument("--attack", required=True, choices=SUPPORTED_ATTACKS)
     parser.add_argument("--seed_size", type=int, default=None)
     parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--depth", type=int, default=None)
+    parser.add_argument("--run_tag", type=str, default=None)
+    parser.add_argument("--sample_size", type=int, default=None)
+    parser.add_argument("--sample_seed", type=int, default=2026)
+
+    parser.add_argument("--epsilon", type=float, default=None)
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--step_size", type=float, default=None)
+    parser.add_argument("--decay", type=float, default=None)
+    parser.add_argument("--topk_ratio", type=float, default=None)
+    parser.add_argument("--c_const", type=float, default=None)
+    parser.add_argument("--confidence", type=float, default=None)
+    parser.add_argument("--attack_lr", type=float, default=None)
+    parser.add_argument("--binary_search_steps", type=int, default=None)
+    parser.add_argument("--kernel_size", type=int, default=None)
+    parser.add_argument("--kernel_sigma", type=float, default=None)
+    parser.add_argument("--attack_seed", type=int, default=None)
+    parser.add_argument("--attack_batch_size", type=int, default=None)
+    parser.add_argument("--random_start", action=argparse.BooleanOptionalAction, default=None)
     return parser.parse_args()
 
 
-def infer_best_config(dataset: str, target_model: str) -> dict:
-    best_json = Path("artifacts/metadata") / f"best_surrogate_{dataset}_{target_model}.json"
-    if best_json.exists():
-        with open(best_json, "r", encoding="utf-8") as f:
-            return json.load(f)
+def sample_test_subset(
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    *,
+    sample_size: int | None,
+    sample_seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if sample_size is None or sample_size >= len(y_test):
+        indices = np.arange(len(y_test), dtype=np.int64)
+        return X_test, y_test, indices
 
-    candidates = sorted(
-        Path("artifacts/models").glob(f"surrogate_{dataset}_{target_model}_seed*_a*_d*.pt")
+    if sample_size < 1:
+        raise ValueError("--sample_size must be >= 1 when provided.")
+
+    indices = np.arange(len(y_test), dtype=np.int64)
+    _, sampled_idx = train_test_split(
+        indices,
+        test_size=sample_size,
+        stratify=y_test,
+        random_state=sample_seed,
     )
-    if not candidates:
-        raise FileNotFoundError("No surrogate model file and no best surrogate config found.")
-
-    preferred = None
-    for p in candidates:
-        if "_seed1000_a0.1_d3.pt" in p.name:
-            preferred = p
-            break
-    if preferred is None:
-        preferred = candidates[-1]
-
-    m = re.search(r"seed(\d+)_a([0-9.]+)_d(\d+)\.pt$", preferred.name)
-    if not m:
-        raise ValueError(f"Cannot parse surrogate config from filename: {preferred.name}")
-
-    return {
-        "dataset": dataset,
-        "target_model": target_model,
-        "seed_size": int(m.group(1)),
-        "alpha": float(m.group(2)),
-        "depth": int(m.group(3)),
-        "model_path": str(preferred),
-    }
-
-
-def build_attack(name: str, dataset: str):
-    if name == "fgm":
-        return FGMAttack(dataset, epsilon=0.5)
-    if name == "pgd":
-        return PGDAttack(dataset, epsilon=0.5, steps=10, step_size=0.1)
-    if name == "mim":
-        return MIMAttack(dataset, epsilon=0.5, steps=10, step_size=0.1, decay=1.0)
-    if name == "ti":
-        return TIAttack(dataset, epsilon=0.5, steps=10, step_size=0.1)
-    if name == "cw":
-        return CWAttack(dataset, c=0.1, steps=30, lr=1e-2)
-    if name == "slide":
-        return SLIDEAttack(
-            dataset,
-            epsilon=0.5,
-            steps=10,
-            step_size=0.1,
-            topk_ratio=0.25,
-            random_start=True,
-            seed=2026,
-        )
-    raise ValueError(name)
+    sampled_idx = np.sort(sampled_idx.astype(np.int64, copy=False))
+    return X_test[sampled_idx], y_test[sampled_idx], sampled_idx
 
 
 def main() -> None:
     args = parse_args()
-    best = infer_best_config(args.dataset, args.target_model)
-
-    seed_size = int(args.seed_size or best["seed_size"])
-    alpha = float(args.alpha or best["alpha"])
-    depth = int(args.depth or best["depth"])
+    config = resolve_surrogate_config(
+        args.dataset,
+        args.target_model,
+        seed_size=args.seed_size,
+        alpha=args.alpha,
+        depth=args.depth,
+    )
 
     processed_dir = Path("data") / args.dataset / "processed"
     X_test = np.load(processed_dir / "X_test.npy").astype(np.float32)
     y_test = np.load(processed_dir / "y_test.npy")
+    X_test, y_test, sample_ids = sample_test_subset(
+        X_test,
+        y_test,
+        sample_size=args.sample_size,
+        sample_seed=args.sample_seed,
+    )
 
     feature_info = load_json(Path("artifacts/preprocessors") / f"{args.dataset}_feature_info.json")
     num_classes = int(feature_info["num_classes"])
 
-    model = MLPSurrogate(input_dim=X_test.shape[1], num_classes=num_classes, depth=depth)
-    model_path = (
-        Path("artifacts/models")
-        / f"surrogate_{args.dataset}_{args.target_model}_seed{seed_size}_a{alpha}_d{depth}.pt"
+    model = MLPSurrogate(input_dim=X_test.shape[1], num_classes=num_classes, depth=config.depth)
+    model_path = surrogate_model_path(
+        config.dataset,
+        config.target_model,
+        config.seed_size,
+        config.alpha,
+        config.depth,
     )
     if not model_path.exists():
         raise FileNotFoundError(f"Surrogate checkpoint not found: {model_path}")
@@ -125,21 +116,20 @@ def main() -> None:
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
 
-    attack = build_attack(args.attack, args.dataset)
+    attack_defaults = default_attack_kwargs(args.attack, args.dataset)
+    attack_overrides = attack_overrides_from_args(args)
+    attack = build_attack(args.attack, args.dataset, **attack_overrides)
+
     X_adv, meta = attack.generate(model, X_test, y_test)
     X_adv = X_adv.astype(np.float32, copy=False)
 
     if X_adv.shape != X_test.shape:
         raise ValueError(f"Adversarial shape mismatch: X_adv={X_adv.shape}, X_test={X_test.shape}")
 
-    out_dir = Path("data/adversarial") / args.dataset
+    out_dir = adversarial_dir(args.dataset, args.run_tag)
     out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{adversarial_stem(args.attack, args.target_model, config.seed_size, config.alpha, config.depth)}.parquet"
 
-    out_path = out_dir / f"{args.attack}_{args.target_model}_seed{seed_size}_a{alpha}_d{depth}.parquet"
-
-    # Store adversarial and its exact paired clean sample in the same file.
-    # This prevents later perturbation metrics from comparing against a stale or
-    # differently ordered X_test.npy.
     adv_cols = [f"f_{i}" for i in range(X_adv.shape[1])]
     clean_cols = [f"orig_f_{i}" for i in range(X_test.shape[1])]
 
@@ -147,31 +137,38 @@ def main() -> None:
     df_orig = pd.DataFrame(X_test, columns=clean_cols)
     df = pd.concat([df_adv, df_orig], axis=1)
     df["label_true"] = y_test
-    df["sample_id"] = np.arange(len(y_test), dtype=np.int64)
+    df["sample_id"] = sample_ids
     df.to_parquet(out_path, index=False)
 
     diff = X_adv - X_test
-    l2 = np.linalg.norm(diff, ord=2, axis=1)
-    linf = np.max(np.abs(diff), axis=1)
+    l2 = np.linalg.norm(diff.reshape(diff.shape[0], -1), ord=2, axis=1)
+    linf = np.max(np.abs(diff.reshape(diff.shape[0], -1)), axis=1)
 
     meta.update(
         {
             "dataset": args.dataset,
             "target_model": args.target_model,
-            "seed_size": seed_size,
-            "alpha": alpha,
-            "depth": depth,
+            "seed_size": config.seed_size,
+            "alpha": config.alpha,
+            "depth": config.depth,
             "surrogate_model_path": str(model_path),
+            "surrogate_config_source": config.source,
+            "attack_defaults": attack_defaults,
+            "attack_overrides": attack_overrides,
             "output_path": str(out_path),
+            "run_tag": args.run_tag,
             "paired_clean_features_saved": True,
             "num_features": int(X_test.shape[1]),
+            "sample_size_requested": args.sample_size,
+            "sample_size_actual": int(len(y_test)),
+            "sample_seed": int(args.sample_seed),
             "mean_l2_perturbation_pre_eval": float(np.mean(l2)),
             "max_l2_perturbation_pre_eval": float(np.max(l2)),
             "mean_linf_perturbation_pre_eval": float(np.mean(linf)),
             "max_linf_perturbation_pre_eval": float(np.max(linf)),
         }
     )
-    meta_path = out_dir / f"{args.attack}_{args.target_model}_seed{seed_size}_a{alpha}_d{depth}_meta.json"
+    meta_path = out_dir / f"{adversarial_stem(args.attack, args.target_model, config.seed_size, config.alpha, config.depth)}_meta.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 

@@ -1,60 +1,31 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser
-from pathlib import Path
-import json
-import re
-
+import argparse
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
+from src.attacks.registry import SUPPORTED_ATTACKS
 from src.blackbox.query_api import BlackBoxModel
 from src.evaluation.transfer_metrics import compute_transfer_metrics
+from src.transfer.experiment import (
+    adversarial_dir,
+    adversarial_stem,
+    resolve_surrogate_config,
+    transfer_results_dir,
+)
 from src.utils.io import save_json
 
 
-def infer_best_config(dataset: str, target_model: str) -> dict:
-    best_json = Path("artifacts/metadata") / f"best_surrogate_{dataset}_{target_model}.json"
-    if best_json.exists():
-        with open(best_json, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    candidates = sorted(
-        Path("artifacts/models").glob(f"surrogate_{dataset}_{target_model}_seed*_a*_d*.pt")
-    )
-    if not candidates:
-        raise FileNotFoundError("No surrogate model file and no best surrogate config found.")
-
-    preferred = None
-    for p in candidates:
-        if "_seed1000_a0.1_d3.pt" in p.name:
-            preferred = p
-            break
-    if preferred is None:
-        preferred = candidates[-1]
-
-    m = re.search(r"seed(\d+)_a([0-9.]+)_d(\d+)\.pt$", preferred.name)
-    if not m:
-        raise ValueError(f"Cannot parse surrogate config from filename: {preferred.name}")
-
-    return {
-        "dataset": dataset,
-        "target_model": target_model,
-        "seed_size": int(m.group(1)),
-        "alpha": float(m.group(2)),
-        "depth": int(m.group(3)),
-        "model_path": str(preferred),
-    }
-
-
 def parse_args():
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required=True, choices=["nsl_kdd", "unsw_nb15"])
     parser.add_argument("--target_model", required=True, choices=["tabnet", "xgb", "gbdt"])
-    parser.add_argument("--attack", required=True, choices=["fgm", "pgd", "mim", "ti", "cw", "slide"])
+    parser.add_argument("--attack", required=True, choices=SUPPORTED_ATTACKS)
     parser.add_argument("--seed_size", type=int, default=None)
     parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--depth", type=int, default=None)
+    parser.add_argument("--run_tag", type=str, default=None)
     return parser.parse_args()
 
 
@@ -65,16 +36,17 @@ def _feature_columns(df: pd.DataFrame, prefix: str) -> list[str]:
 
 def main() -> None:
     args = parse_args()
-    best = infer_best_config(args.dataset, args.target_model)
-
-    seed_size = int(args.seed_size or best["seed_size"])
-    alpha = float(args.alpha or best["alpha"])
-    depth = int(args.depth or best["depth"])
+    config = resolve_surrogate_config(
+        args.dataset,
+        args.target_model,
+        seed_size=args.seed_size,
+        alpha=args.alpha,
+        depth=args.depth,
+    )
 
     adv_path = (
-        Path("data/adversarial")
-        / args.dataset
-        / f"{args.attack}_{args.target_model}_seed{seed_size}_a{alpha}_d{depth}.parquet"
+        adversarial_dir(args.dataset, args.run_tag)
+        / f"{adversarial_stem(args.attack, args.target_model, config.seed_size, config.alpha, config.depth)}.parquet"
     )
     if not adv_path.exists():
         raise FileNotFoundError(f"Adversarial file not found: {adv_path}")
@@ -97,7 +69,7 @@ def main() -> None:
     if X_clean.shape != X_adv.shape:
         raise ValueError(
             f"Clean/adversarial shape mismatch: clean={X_clean.shape}, adv={X_adv.shape}. "
-            "Regenerate adversarial samples with the patched generate_from_surrogate.py."
+            "Regenerate adversarial samples with the current generate_from_surrogate.py."
         )
 
     blackbox = BlackBoxModel(args.dataset, args.target_model)
@@ -128,9 +100,8 @@ def main() -> None:
         }
     )
 
-    out_dir = Path("results/tables")
+    out_dir = transfer_results_dir(args.run_tag)
     out_dir.mkdir(parents=True, exist_ok=True)
-
     out_csv = out_dir / f"transfer_{args.attack}_{args.dataset}_{args.target_model}.csv"
     result_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
@@ -138,12 +109,12 @@ def main() -> None:
     metrics["dataset"] = args.dataset
     metrics["target_model"] = args.target_model
     metrics["attack"] = args.attack
-    metrics["seed_size"] = seed_size
-    metrics["alpha"] = alpha
-    metrics["depth"] = depth
+    metrics["seed_size"] = config.seed_size
+    metrics["alpha"] = config.alpha
+    metrics["depth"] = config.depth
+    metrics["run_tag"] = args.run_tag
     metrics["clean_feature_source_for_perturbation"] = clean_source
 
-    # Diagnostics for spotting rare outliers without hiding them.
     for q in [0.5, 0.9, 0.95, 0.99, 0.999]:
         metrics[f"l2_q{q}"] = float(np.quantile(l2, q))
         metrics[f"linf_q{q}"] = float(np.quantile(linf, q))

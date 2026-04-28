@@ -47,7 +47,6 @@
 | SLIDE 攻击生成与迁移评估        | 已完成                          |
 | 参数搜索 `surrogate_sweep` | 已完成                          |
 | 最终实验 `full_pipeline`   | 已完成                          |
-| 统一一键入口 `research_suite` | 已完成，可在 `main.py` 直接串联完整实验 |
 | 结果汇总报告 `report`        | 已完成                          |
 | 图表生成                   | 已接入 `results/summary/plots/` |
 | C&W / MIM / TI         | 已接入统一攻击流水线，可用于调参与迁移评估          |
@@ -172,65 +171,57 @@ data/unsw_nb15/raw/UNSW_NB15_testing-set.csv
 
 ## 6. 一键运行完整实验
 
-现在推荐直接使用 `main.py` 的统一入口 `research_suite`。
+### 6.1 NSL-KDD 最终实验
 
-### 6.1 单数据集完整实验
+当前推荐参数：
 
-`NSL-KDD`：
-
-```powershell
-python main.py nsl --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
+```text
+seed_size = 1000
+alpha = 0.10
+depth = 3
+attacks = fgm, pgd, slide
+targets = xgb, gbdt, tabnet
 ```
 
-`UNSW-NB15`：
+运行命令：
 
 ```powershell
-python main.py unsw --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
+python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide --retrain-targets --run-report
 ```
 
-说明：
+### 6.2 UNSW-NB15 最终实验
 
-- 该入口会自动执行：`prepare -> 三个目标模型训练 -> surrogate 构建 -> 多攻击迁移评估 -> 汇总报告`
-- 默认优先读取 `artifacts/metadata/best_surrogate_sweep_<dataset>_<target>.json`
-- 如果不存在最优配置元数据，则回退到当前仓库的推荐默认值
+当前推荐参数：
 
-### 6.2 两个数据集一起跑
-
-```powershell
-python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
+```text
+seed_size = 1000
+alpha = 0.10
+depth = 4
+attacks = fgm, pgd, slide
+targets = xgb, gbdt, tabnet
 ```
 
-这个命令会按顺序跑：
-
-1. `nsl_kdd`
-2. `unsw_nb15`
-3. 汇总生成 `results/summary/`
-
-### 6.3 兼容旧入口
-
-如果你只想跑单数据集的传统主线，仍然可以使用：
+运行命令：
 
 ```powershell
-python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
-
-python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 4 --attacks fgm pgd slide --retrain-targets --run-report
 ```
 
-如果希望 `full_pipeline` / `full_attack_matrix` / `transfer_only` 这类阶段自动采用已筛出的最佳 surrogate 参数，可加上：
+### 6.3 推荐运行方式
+
+为了避免两个数据集的总报告相互覆盖，推荐先分别运行实验，最后统一生成报告：
 
 ```powershell
---use-best-surrogate-config
+python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide --retrain-targets
+
+python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 4 --attacks fgm pgd slide --retrain-targets
+
+python main.py --stage report
 ```
 
 ---
 
 ## 7. 参数选择说明
-
-说明：
-
-- 使用 `research_suite` 时，会优先按 `best_surrogate_sweep_<dataset>_<target>.json` 为每个目标模型分别选择 `seed_size / alpha / depth`
-- 只有在显式传入 `--seed-size`、`--alpha`、`--depth` 时，才会覆盖自动读取到的最佳配置
-- 因此下面的固定参数更适合作为回退默认值或旧版主线命令参考
 
 ### 7.1 NSL-KDD 参数选择
 
@@ -293,7 +284,7 @@ depth = 4
   ↓
 训练 MLP surrogate 替代模型
   ↓
-在 surrogate 上生成对抗样本 FGM / PGD / MIM / TI / C&W / SLIDE
+在 surrogate 上生成对抗样本 FGM / PGD / SLIDE
   ↓
 迁移到目标黑盒模型评估
   ↓
@@ -330,12 +321,12 @@ transfer_success_rate = count(clean_correct and adv_wrong) / count(clean_correct
 
 ## 10. 当前最终实验结果
 
-以下结果来自旧版主线运行命令：
+以下结果来自最终运行命令：
 
 ```powershell
-python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide --retrain-targets --run-report
 
-python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --seed-size 1000 --alpha 0.10 --depth 4 --attacks fgm pgd slide --retrain-targets --run-report
 ```
 
 ### 10.1 NSL-KDD 目标模型性能
@@ -549,14 +540,6 @@ python main.py nsl --stage attack_target --target xgb --seed-size 1000 --alpha 0
 python main.py --stage report
 ```
 
-### 13.7 统一一键入口
-
-```powershell
-python main.py nsl --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
-
-python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
-```
-
 ---
 
 ## 14. 参数搜索命令
@@ -568,19 +551,6 @@ python main.py nsl --stage surrogate_sweep --targets xgb gbdt tabnet --core-only
 
 python main.py unsw --stage surrogate_sweep --targets xgb gbdt tabnet --core-only --attacks fgm pgd slide --run-report
 ```
-
-针对 `MIM / TI / C&W` 的攻击参数搜索，可直接使用：
-
-```powershell
-python scripts/tune_attack_params.py --dataset nsl_kdd --targets xgb --attacks mim ti cw
-
-python scripts/tune_attack_params.py --dataset unsw_nb15 --targets xgb --attacks mim ti cw --sample-size 4096
-```
-
-说明：
-
-- `generate_from_surrogate.py` 与 `attack_target.py` 会优先读取 `artifacts/metadata/best_surrogate_sweep_<dataset>_<target>.json`
-- 带 `run_tag` 的调参结果会写入 `data/adversarial/<dataset>/tagged/` 与 `results/tables/tagged/`，不会覆盖主实验结果
 
 输出位置：
 
