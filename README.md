@@ -4,16 +4,20 @@
 
 本项目面向 **网络入侵检测系统（NIDS）** 的对抗鲁棒性评估，构建了一个基于 **MSM（Mixup-based Surrogate Model）黑盒迁移攻击框架** 的完整实验流水线。项目支持在 **NSL-KDD** 与 **UNSW-NB15** 两个公开网络流量数据集上，训练目标入侵检测模型、构建替代模型、生成对抗流量，并评估对抗样本在黑盒目标模型上的迁移攻击效果。
 
-本项目当前已实现并可在统一流水线中运行以下攻击方法：
+本项目当前已实现并接入统一流水线的攻击方法包括：
 
-- FGM
-- PGD
-- MIM
-- TI
-- C&W
-- SLIDE
+| 攻击方法 | 实现状态 | 说明 |
+| -------- | -------- | ---- |
+| FGM | 已接入 | 单步 L2 梯度攻击 |
+| PGD | 已接入 | 迭代式 L2 投影梯度攻击 |
+| SLIDE | 已接入 | 面向表格流量特征的稀疏迭代攻击，不再是 PGD 别名 |
+| MIM | 已接入 | Linf 动量迭代攻击 |
+| TI | 已接入 | 面向表格特征的平滑梯度迁移攻击 |
+| C&W | 已接入 | Untargeted C&W-style L2 攻击 |
 
-其中 `FGM / PGD / SLIDE` 仍是默认主线攻击组合，`MIM / TI / C&W` 已补齐到同一套生成与评估链路中，可直接参与迁移攻击实验与参数搜索。
+推荐在完整实验中显式传入 `--attacks fgm pgd slide mim ti cw`，以生成六类攻击的统一迁移评估结果。若不显式传入 `--attacks`，程序会使用 `fgm pgd slide` 作为快速 smoke run 默认序列；这只是运行默认值，不代表当前项目只支持三种攻击。
+
+> 真实性说明：README 中关于数据集和攻击方法的描述均对应公开数据集或公开论文；关于“已接入”“已实现”的表述指本地代码链路已经存在。具体实验数值必须以本地运行后生成的 `results/tables/transfer_*_metrics.json` 和 `results/summary/all_transfer_matrix.csv` 为准，当前文档不编造或内嵌未落盘的六攻击结果。
 
 ---
 
@@ -42,15 +46,15 @@
 | GBDT 目标模型训练            | 已完成                          |
 | TabNet 目标模型训练          | 已完成                          |
 | MSM 替代模型训练             | 已完成                          |
-| FGM 攻击生成与迁移评估          | 已完成                          |
-| PGD 攻击生成与迁移评估          | 已完成                          |
-| SLIDE 攻击生成与迁移评估        | 已完成                          |
+| 六类攻击生成与迁移评估链路         | 已实现，支持 `fgm / pgd / slide / mim / ti / cw` |
 | 参数搜索 `surrogate_sweep` | 已完成                          |
 | 最终实验 `full_pipeline`   | 已完成                          |
-| 统一一键入口 `research_suite` | 已完成，可在 `main.py` 直接串联完整实验 |
-| 结果汇总报告 `report`        | 已完成                          |
+| 统一一键入口 `research_suite` | 已完成，并已完成统一接口链路测试 |
+| 结果汇总报告 `report`        | 已实现，从本地 metrics 文件聚合生成 |
 | 图表生成                   | 已接入 `results/summary/plots/` |
-| C&W / MIM / TI         | 已接入统一攻击流水线，可用于调参与迁移评估          |
+| 攻击参数覆盖与调参              | 已完成，支持 MIM / TI / C&W 参数网格搜索与 tagged 输出 |
+| 新版对抗样本数据结构            | 已完成，保存对抗特征、配对干净特征、真实标签与样本索引 |
+| 完整六攻击结果文件              | 待本地运行产出或复核；当前工作区未发现完整汇总文件 |
 
 ---
 
@@ -90,13 +94,14 @@ Adversarial-Attack-Transfer/
 │   ├── surrogate_train/
 │   └── adversarial/
 ├── artifacts/
-│   └── models/
+│   ├── models/
+│   └── metadata/
 └── results/
     ├── tables/
+    │   └── attack_sweeps/
     ├── summary/
     │   ├── all_transfer_matrix.csv
     │   ├── all_transfer_matrix.md
-    │   ├── all_metrics_detail.csv
     │   ├── result_summary.md
     │   └── plots/
     └── param_search/
@@ -193,6 +198,8 @@ python main.py unsw --stage research_suite --attacks fgm pgd slide mim ti cw --r
 - 该入口会自动执行：`prepare -> 三个目标模型训练 -> surrogate 构建 -> 多攻击迁移评估 -> 汇总报告`
 - 默认优先读取 `artifacts/metadata/best_surrogate_sweep_<dataset>_<target>.json`
 - 如果不存在最优配置元数据，则回退到当前仓库的推荐默认值
+- 当前统一入口已完成链路测试，可统一调度 `fgm / pgd / slide / mim / ti / cw` 六类攻击
+- 如果需要复用已经训练好的目标模型和 surrogate，可增加 `--reuse-existing-artifacts` 以只重新生成和评估攻击结果
 
 ### 6.2 两个数据集一起跑
 
@@ -206,14 +213,14 @@ python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --ru
 2. `unsw_nb15`
 3. 汇总生成 `results/summary/`
 
-### 6.3 兼容旧入口
+### 6.3 单阶段入口参考
 
-如果你只想跑单数据集的传统主线，仍然可以使用：
+如果只需要跑单数据集的 `full_pipeline`，也可以使用同一组六攻击参数：
 
 ```powershell
-python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide mim ti cw --run-report
 
-python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide mim ti cw --run-report
 ```
 
 如果希望 `full_pipeline` / `full_attack_matrix` / `transfer_only` 这类阶段自动采用已筛出的最佳 surrogate 参数，可加上：
@@ -230,7 +237,7 @@ python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fg
 
 - 使用 `research_suite` 时，会优先按 `best_surrogate_sweep_<dataset>_<target>.json` 为每个目标模型分别选择 `seed_size / alpha / depth`
 - 只有在显式传入 `--seed-size`、`--alpha`、`--depth` 时，才会覆盖自动读取到的最佳配置
-- 因此下面的固定参数更适合作为回退默认值或旧版主线命令参考
+- 因此下面的固定参数更适合作为回退默认值或单阶段命令参考
 
 ### 7.1 NSL-KDD 参数选择
 
@@ -247,7 +254,7 @@ depth = 3
 - `depth=3` 表现最稳定。
 - `seed_size=1000` 在替代模型学习能力与过拟合风险之间较平衡。
 - `alpha=0.10` 在迁移成功率和扰动约束之间较稳定。
-- PGD 整体攻击最强。
+- 六攻击完整对比请以 `results/summary/all_transfer_matrix.csv` 中的最新汇总为准。
 
 ### 7.2 UNSW-NB15 参数选择
 
@@ -264,7 +271,7 @@ depth = 4
 - UNSW-NB15 数据规模更大、类别更多，替代模型需要更深结构。
 - `depth=4` 对 XGB 与 TabNet 表现较好。
 - `alpha=0.10` 整体稳定。
-- PGD 在三个目标模型上均表现最强。
+- 六攻击完整对比请以 `results/summary/all_transfer_matrix.csv` 中的最新汇总为准。
 
 ---
 
@@ -328,79 +335,119 @@ transfer_success_rate = count(clean_correct and adv_wrong) / count(clean_correct
 
 ---
 
-## 10. 当前最终实验结果
+## 10. 统一接口测试与数据产物
 
-以下结果来自旧版主线运行命令：
+统一入口 `research_suite` 已作为当前推荐实验接口完成链路测试。该入口会按数据集和目标模型解析最佳 surrogate 配置，依次完成攻击样本生成、黑盒目标模型评估、单目标结果汇总，并在传入 `--run-report` 时生成全局汇总报告。
 
-```powershell
-python main.py nsl --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+### 10.1 已验证的统一接口能力
 
-python main.py unsw --stage full_pipeline --targets xgb gbdt tabnet --attacks fgm pgd slide --run-report
+| 能力 | 说明 |
+| ---- | ---- |
+| 数据集别名 | 支持 `nsl` / `nsl_kdd` / `unsw` / `unsw_nb15` / `all` |
+| 多目标模型 | 支持 `xgb`、`gbdt`、`tabnet`，未显式指定时使用数据集默认目标顺序 |
+| 多攻击方法 | 支持 `fgm`、`pgd`、`slide`、`mim`、`ti`、`cw` |
+| 最佳 surrogate 配置 | 优先读取 `artifacts/metadata/best_surrogate_sweep_<dataset>_<target>.json` 或 `best_surrogate_<dataset>_<target>.json` |
+| 攻击参数覆盖 | 支持 `epsilon`、`steps`、`step_size`、`decay`、`topk_ratio`、`c_const`、`attack_lr`、`kernel_size` 等参数 |
+| 抽样攻击评估 | `generate_from_surrogate.py` 支持 `--sample_size` 与 `--sample_seed`，便于调参快速验证 |
+| 结果复用 | 支持 `--reuse-existing-artifacts` 跳过已存在的目标模型和 surrogate 训练 |
+| 报告生成 | 支持 `--run-report` 聚合 `results/tables/transfer_*_metrics.json` 并输出图表 |
+
+### 10.2 新生成数据格式
+
+统一接口生成的对抗样本写入：
+
+```text
+data/adversarial/<dataset>/<attack>_<target>_seed<seed_size>_a<alpha>_d<depth>.parquet
 ```
 
-### 10.1 NSL-KDD 目标模型性能
+每个 parquet 文件包含以下核心字段：
 
-| Target | Clean Accuracy | Clean Macro-F1 |
-| ------ | --------------:| --------------:|
-| XGB    | 0.9864         | 0.9698         |
-| GBDT   | 0.9864         | 0.9668         |
-| TabNet | 0.9752         | 0.9535         |
+| 字段 | 含义 |
+| ---- | ---- |
+| `f_*` | 对抗样本特征 |
+| `orig_f_*` | 与对抗样本一一配对的干净原始特征 |
+| `label_true` | 真实标签 |
+| `sample_id` | 原测试集样本索引，用于抽样实验和结果追踪 |
 
-### 10.2 NSL-KDD 迁移攻击结果
+配套元数据写入：
 
-| Target | Attack | Transfer Success Rate | Accuracy Drop | Macro-F1 Drop |
-| ------ | ------ | ---------------------:| -------------:| -------------:|
-| XGB    | FGM    | 0.4365                | 0.4270        | 0.5752        |
-| XGB    | PGD    | 0.5339                | 0.5257        | 0.6561        |
-| XGB    | SLIDE  | 0.4359                | 0.4261        | 0.5709        |
-| GBDT   | FGM    | 0.2863                | 0.2806        | 0.3533        |
-| GBDT   | PGD    | 0.3444                | 0.3371        | 0.3885        |
-| GBDT   | SLIDE  | 0.2812                | 0.2747        | 0.3335        |
-| TabNet | FGM    | 0.0440                | 0.0426        | 0.0770        |
-| TabNet | PGD    | 0.2511                | 0.2445        | 0.3683        |
-| TabNet | SLIDE  | 0.1004                | 0.0961        | 0.1489        |
+```text
+data/adversarial/<dataset>/<attack>_<target>_seed<seed_size>_a<alpha>_d<depth>_meta.json
+```
 
-NSL-KDD 结论：
+其中记录攻击默认参数、命令行覆盖参数、surrogate 配置来源、实际样本量、扰动预检查统计等信息。
 
-- XGB 最容易受到迁移攻击。
-- PGD 在三个目标模型上均为最强攻击。
-- TabNet 在 NSL-KDD 上表现出更强鲁棒性。
-- 推荐重点报告：`XGB + PGD`，迁移成功率为 `0.5339`。
+### 10.3 评估与汇总输出
 
----
+黑盒迁移评估会输出：
 
-### 10.3 UNSW-NB15 目标模型性能
+```text
+results/tables/transfer_<attack>_<dataset>_<target>.csv
+results/tables/transfer_<attack>_<dataset>_<target>_metrics.json
+```
 
-| Target | Clean Accuracy | Clean Macro-F1 |
-| ------ | --------------:| --------------:|
-| XGB    | 0.7652         | 0.5188         |
-| GBDT   | 0.7539         | 0.4942         |
-| TabNet | 0.7519         | 0.4268         |
+单目标矩阵汇总会输出：
 
-### 10.4 UNSW-NB15 迁移攻击结果
+```text
+results/tables/final_transfer_matrix_<dataset>_<target>.csv
+results/tables/final_transfer_matrix_<dataset>_<target>.md
+```
 
-| Target | Attack | Transfer Success Rate | Accuracy Drop | Macro-F1 Drop |
-| ------ | ------ | ---------------------:| -------------:| -------------:|
-| XGB    | FGM    | 0.5275                | 0.3854        | 0.3737        |
-| XGB    | PGD    | 0.5803                | 0.4367        | 0.4015        |
-| XGB    | SLIDE  | 0.4686                | 0.3223        | 0.3366        |
-| GBDT   | FGM    | 0.4396                | 0.2838        | 0.2693        |
-| GBDT   | PGD    | 0.5421                | 0.3625        | 0.3103        |
-| GBDT   | SLIDE  | 0.2242                | 0.1340        | 0.1879        |
-| TabNet | FGM    | 0.1784                | 0.1305        | 0.1386        |
-| TabNet | PGD    | 0.5764                | 0.4233        | 0.3060        |
-| TabNet | SLIDE  | 0.2618                | 0.1869        | 0.1607        |
+全局报告会输出：
 
-UNSW-NB15 结论：
+```text
+results/summary/all_transfer_matrix.csv
+results/summary/all_transfer_matrix.md
+results/summary/result_summary.md
+results/summary/plots/
+```
 
-- PGD 是最强攻击方法。
-- `XGB + PGD` 达到最高迁移成功率 `0.5803`。
-- `TabNet + PGD` 也达到 `0.5764`，说明 UNSW-NB15 上 TabNet 对 PGD 的迁移攻击更敏感。
-- UNSW-NB15 整体迁移性强于 NSL-KDD。
+说明：当前统一接口链路、对抗样本结构、迁移评估输出与报告聚合均已完成。`FGM / PGD / SLIDE / MIM / TI / C&W` 已进入统一入口和数据产物链路，可通过 `research_suite --attacks fgm pgd slide mim ti cw --run-report` 纳入完整汇总；具体数值指标以运行后生成的 `results/summary/all_transfer_matrix.csv` 为准。
 
 ---
 
-## 11. 图表展示
+## 11. 当前阶段实验结果
+
+当前阶段的重点是统一接口和新版数据链路已经完成。六类攻击可通过同一个 `research_suite` 入口运行，结果统一汇总到 `results/summary/`。
+
+```powershell
+python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
+```
+
+### 11.1 当前已完成内容
+
+| 内容 | 当前状态 |
+| ---- | ---- |
+| 数据集 | `nsl_kdd`、`unsw_nb15` 均已纳入统一入口 |
+| 目标模型 | `xgb`、`gbdt`、`tabnet` 均可由统一入口调度 |
+| 攻击方法 | `fgm`、`pgd`、`slide`、`mim`、`ti`、`cw` 均已接入 |
+| 对抗样本输出 | 统一写入 `data/adversarial/<dataset>/`，并保存配对干净特征 |
+| 迁移评估输出 | 统一写入 `results/tables/transfer_<attack>_<dataset>_<target>_metrics.json` |
+| 全局结果汇总 | 由 `--run-report` 生成 `results/summary/all_transfer_matrix.csv` 与图表 |
+
+### 11.2 当前结果读取方式
+
+当前 README 不再内嵌固定实验数值。完成统一入口实验后，请以以下文件作为最新结果来源：
+
+```text
+results/summary/all_transfer_matrix.csv
+results/summary/all_transfer_matrix.md
+results/summary/result_summary.md
+results/summary/plots/
+```
+
+其中 `all_transfer_matrix.csv` 是论文表格和后续分析的主数据源，`result_summary.md` 用于快速查看最优攻击组合、分数据集最优结果、分目标模型最优结果和扰动异常检查。
+
+### 11.3 当前进度结论
+
+- 项目已从单独脚本式实验推进到 `main.py` 统一实验入口。
+- 六类攻击方法已经纳入同一套生成、评估、汇总链路。
+- 新版对抗样本保留配对干净特征，可避免评估阶段因样本顺序或抽样造成扰动统计偏差。
+- 后续论文或报告中的具体数值应直接读取 `results/summary/all_transfer_matrix.csv`，避免 README 与实验产物不同步。
+
+---
+
+## 12. 图表展示
 
 运行报告命令后：
 
@@ -416,23 +463,23 @@ results/summary/plots/
 
 
 
-### 11.1 迁移成功率柱状图
+### 12.1 迁移成功率柱状图
 
 ![Transfer Success Rate](results/summary/plots/transfer_success_rate_bar.png)
 
-### 11.2 准确率下降柱状图
+### 12.2 准确率下降柱状图
 
 ![Accuracy Drop](results/summary/plots/accuracy_drop_bar.png)
 
-### 11.3 Macro-F1 下降柱状图
+### 12.3 Macro-F1 下降柱状图
 
 ![Macro F1 Drop](results/summary/plots/macro_f1_drop_bar.png)
 
-### 11.4 迁移成功率热力图
+### 12.4 迁移成功率热力图
 
 ![Grouped Transfer Success Rate](results/summary/plots/transfer_success_rate_heatmap.png)
 
-### 11.5 99.9% Linf 扰动分位数
+### 12.5 99.9% Linf 扰动分位数
 
 ![Linf q0.999](results/summary/plots/perturbation_linf_999.png)
 
@@ -444,9 +491,9 @@ dir results\summary\plots
 
 ---
 
-## 12. 输出结果说明
+## 13. 输出结果说明
 
-### 12.1 表格结果
+### 13.1 表格结果
 
 ```text
 results/tables/
@@ -461,7 +508,7 @@ final_transfer_matrix_nsl_kdd_xgb.csv
 final_transfer_matrix_unsw_nb15_tabnet.csv
 ```
 
-### 12.2 总结报告
+### 13.2 总结报告
 
 ```text
 results/summary/
@@ -472,12 +519,11 @@ results/summary/
 ```text
 results/summary/all_transfer_matrix.csv
 results/summary/all_transfer_matrix.md
-results/summary/all_metrics_detail.csv
 results/summary/result_summary.md
 results/summary/plots/
 ```
 
-### 12.3 对抗样本
+### 13.3 对抗样本
 
 ```text
 data/adversarial/nsl_kdd/
@@ -491,7 +537,16 @@ data/adversarial/nsl_kdd/pgd_xgb_seed1000_a0.1_d3.parquet
 data/adversarial/unsw_nb15/pgd_tabnet_seed1000_a0.1_d4.parquet
 ```
 
-### 12.4 模型文件
+新版对抗样本文件同时保存 `f_*` 与 `orig_f_*` 字段，评估阶段优先使用同文件中的配对干净特征计算扰动；如果读取到早期生成且缺少 `orig_f_*` 的文件，才回退到 `data/<dataset>/processed/X_test.npy`。
+
+如果使用 `--run_tag` 进行调参或抽样实验，输出会写入：
+
+```text
+data/adversarial/<dataset>/tagged/<run_tag>/
+results/tables/tagged/<run_tag>/
+```
+
+### 13.4 模型文件
 
 ```text
 artifacts/models/
@@ -508,16 +563,16 @@ artifacts/models/tabnet_unsw_nb15.zip
 
 ---
 
-## 13. 单阶段运行命令
+## 14. 单阶段运行命令
 
-### 13.1 仅准备数据
+### 14.1 仅准备数据
 
 ```powershell
 python main.py nsl --stage prepare
 python main.py unsw --stage prepare
 ```
 
-### 13.2 仅训练目标模型
+### 14.2 仅训练目标模型
 
 ```powershell
 python main.py nsl --stage baseline --target xgb
@@ -525,31 +580,31 @@ python main.py nsl --stage baseline --target gbdt
 python main.py nsl --stage baseline --target tabnet
 ```
 
-### 13.3 构建替代模型
+### 14.3 构建替代模型
 
 ```powershell
 python main.py nsl --stage surrogate --target xgb --seed-size 1000 --alpha 0.10 --depth 3
 ```
 
-### 13.4 生成对抗样本
+### 14.4 生成对抗样本
 
 ```powershell
-python main.py nsl --stage generate_attack --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks pgd
+python main.py nsl --stage generate_attack --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide mim ti cw
 ```
 
-### 13.5 评估迁移攻击
+### 14.5 评估迁移攻击
 
 ```powershell
-python main.py nsl --stage attack_target --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks pgd
+python main.py nsl --stage attack_target --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide mim ti cw
 ```
 
-### 13.6 生成报告
+### 14.6 生成报告
 
 ```powershell
 python main.py --stage report
 ```
 
-### 13.7 统一一键入口
+### 14.7 统一一键入口
 
 ```powershell
 python main.py nsl --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
@@ -559,17 +614,17 @@ python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --ru
 
 ---
 
-## 14. 参数搜索命令
+## 15. 参数搜索命令
 
 当前支持 `surrogate_sweep`：
 
 ```powershell
-python main.py nsl --stage surrogate_sweep --targets xgb gbdt tabnet --core-only --attacks fgm pgd slide --run-report
+python main.py nsl --stage surrogate_sweep --targets xgb gbdt tabnet --core-only --attacks fgm pgd slide mim ti cw --run-report
 
-python main.py unsw --stage surrogate_sweep --targets xgb gbdt tabnet --core-only --attacks fgm pgd slide --run-report
+python main.py unsw --stage surrogate_sweep --targets xgb gbdt tabnet --core-only --attacks fgm pgd slide mim ti cw --run-report
 ```
 
-针对 `MIM / TI / C&W` 的攻击参数搜索，可直接使用：
+针对攻击参数搜索，可使用内置的 `MIM / TI / C&W` 参数网格：
 
 ```powershell
 python scripts/tune_attack_params.py --dataset nsl_kdd --targets xgb --attacks mim ti cw
@@ -581,12 +636,14 @@ python scripts/tune_attack_params.py --dataset unsw_nb15 --targets xgb --attacks
 
 - `generate_from_surrogate.py` 与 `attack_target.py` 会优先读取 `artifacts/metadata/best_surrogate_sweep_<dataset>_<target>.json`
 - 带 `run_tag` 的调参结果会写入 `data/adversarial/<dataset>/tagged/` 与 `results/tables/tagged/`，不会覆盖主实验结果
+- `scripts/tune_attack_params.py` 会将调参汇总写入 `results/tables/attack_sweeps/`
 
 输出位置：
 
 ```text
 results/param_search/
 results/tables/
+results/tables/attack_sweeps/
 results/summary/
 ```
 
@@ -599,7 +656,7 @@ results/summary/
 
 ---
 
-## 15. 扰动异常说明
+## 16. 扰动异常说明
 
 实验中可以观察到少量样本存在较大的 `max_l2_perturbation` 和 `max_linf_perturbation`。但从 `l2_q0.999` 和 `linf_q0.999` 来看，大部分样本扰动仍处于较小范围内。
 
@@ -609,22 +666,22 @@ results/summary/
 
 ---
 
-## 16. 当前关键结论
+## 17. 当前关键结论
 
-1. PGD 是当前最强攻击方法。
-2. UNSW-NB15 的整体迁移攻击成功率高于 NSL-KDD。
-3. NSL-KDD 上 XGB 最容易受到迁移攻击，TabNet 相对更稳健。
-4. UNSW-NB15 上 XGB 与 TabNet 在 PGD 攻击下均表现出较高脆弱性。
-5. MSM 替代模型可以在仅使用少量查询样本的黑盒条件下实现较有效的迁移攻击。
-6. 高分位扰动指标比最大扰动更能反映整体扰动水平。
-7. 当前默认主线实验仍使用 FGM、PGD、SLIDE；C&W、MIM、TI 已接入统一链路，可单独运行、调参与补充到迁移评估中。
+1. 当前项目已形成以 `main.py` 为入口的统一实验流水线，可覆盖两个数据集、三个目标模型与六类攻击。
+2. `FGM / PGD / SLIDE / MIM / TI / C&W` 已接入同一套 surrogate 生成、对抗样本生成、黑盒评估和报告汇总链路。
+3. SLIDE 已实现为面向表格流量特征的稀疏迭代攻击，不再复用 PGD 实现。
+4. 新版对抗样本同时保存 `f_*` 与 `orig_f_*`，迁移评估阶段优先使用配对干净特征计算扰动，降低抽样或样本顺序导致的统计偏差。
+5. `transfer_success_rate` 采用严格定义：只统计干净样本上原本分类正确、加入扰动后分类错误的样本比例。
+6. 报告阶段会自动聚合 `results/tables/transfer_*_metrics.json`，并输出总表、Markdown 汇总和图表。
+7. 具体攻击强弱、跨数据集差异和目标模型脆弱性应以最新 `results/summary/all_transfer_matrix.csv` 为准，README 不再内嵌固定实验数值。
 
 ---
 
-## 17. 后续工作
+## 18. 后续工作
 
 - 基于 `scripts/tune_attack_params.py` 继续细化 C&W / MIM / TI 的跨数据集默认参数。
-- 将 C&W / MIM / TI 的最优结果系统性纳入最终报告对比。
+- 运行 `research_suite --run-report` 后，将 `results/summary/all_transfer_matrix.csv` 中的六攻击统一接口结果系统性纳入论文和最终报告对比。
 - 增加多替代模型 ensemble surrogate。
 - 增加 GPU 加速配置。
 - 优化 UNSW-NB15 上 surrogate 的类别不均衡问题。
