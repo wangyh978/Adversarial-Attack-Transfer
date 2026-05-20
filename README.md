@@ -335,11 +335,50 @@ transfer_success_rate = count(clean_correct and adv_wrong) / count(clean_correct
 
 ---
 
-## 10. 统一接口测试与数据产物
+## 10. 真实性与可复现性说明
+
+本项目区分三类证据：外部公开依据、本地代码实现、本地结果产物。数据集和攻击方法不是虚构概念；但具体实验数值只有在本地生成结果文件后才可写入论文或报告。
+
+### 10.1 外部公开依据
+
+| 对象 | 公开依据 |
+| ---- | ---- |
+| NSL-KDD | [Canadian Institute for Cybersecurity / UNB NSL-KDD Dataset](https://www.unb.ca/cic/datasets/nsl.html) |
+| UNSW-NB15 | [UNSW-NB15 Dataset 官方页面](https://research.unsw.edu.au/projects/unsw-nb15-dataset) |
+| FGM / FGSM | [Goodfellow et al., Explaining and Harnessing Adversarial Examples](https://arxiv.org/abs/1412.6572) |
+| PGD | [Madry et al., Towards Deep Learning Models Resistant to Adversarial Attacks](https://arxiv.org/abs/1706.06083) |
+| MIM | [Dong et al., Boosting Adversarial Attacks With Momentum](https://openaccess.thecvf.com/content_cvpr_2018/html/Dong_Boosting_Adversarial_Attacks_CVPR_2018_paper.html) |
+| TI | [Translation-Invariant Attacks](https://arxiv.org/abs/1904.02884) |
+| C&W | [Carlini & Wagner, Towards Evaluating the Robustness of Neural Networks](https://arxiv.org/abs/1608.04644) |
+
+### 10.2 本地代码实现证据
+
+| 能力 | 本地证据 |
+| ---- | ---- |
+| 六攻击注册 | `src/attacks/registry.py` 注册 `fgm / pgd / mim / ti / cw / slide` |
+| 统一入口 | `main.py` 的 `--attacks` 使用 `SUPPORTED_ATTACKS`，`research_suite` 调度多数据集、多目标、多攻击链路 |
+| 对抗样本生成 | `src/transfer/generate_from_surrogate.py` 生成 parquet 与 meta JSON |
+| 黑盒迁移评估 | `src/transfer/attack_target.py` 生成 `transfer_<attack>_<dataset>_<target>.csv` 与 metrics JSON |
+| 汇总报告 | `scripts/build_result_report.py` 从 `results/tables/transfer_*_metrics.json` 聚合生成 `results/summary/all_transfer_matrix.csv` |
+
+### 10.3 本地结果产物状态
+
+当前工作区尚未发现完整六攻击结果产物：
+
+```text
+results/tables/transfer_*_metrics.json
+results/summary/all_transfer_matrix.csv
+```
+
+因此 README 只说明“六攻击统一生成、评估、汇总链路已实现”，不写入未由本地产物支撑的具体结果数值，也不宣称完整六攻击结果已经落盘。
+
+---
+
+## 11. 统一接口测试与数据产物
 
 统一入口 `research_suite` 已作为当前推荐实验接口完成链路测试。该入口会按数据集和目标模型解析最佳 surrogate 配置，依次完成攻击样本生成、黑盒目标模型评估、单目标结果汇总，并在传入 `--run-report` 时生成全局汇总报告。
 
-### 10.1 已验证的统一接口能力
+### 11.1 已验证的统一接口能力
 
 | 能力 | 说明 |
 | ---- | ---- |
@@ -352,7 +391,7 @@ transfer_success_rate = count(clean_correct and adv_wrong) / count(clean_correct
 | 结果复用 | 支持 `--reuse-existing-artifacts` 跳过已存在的目标模型和 surrogate 训练 |
 | 报告生成 | 支持 `--run-report` 聚合 `results/tables/transfer_*_metrics.json` 并输出图表 |
 
-### 10.2 新生成数据格式
+### 11.2 新生成数据格式
 
 统一接口生成的对抗样本写入：
 
@@ -377,7 +416,7 @@ data/adversarial/<dataset>/<attack>_<target>_seed<seed_size>_a<alpha>_d<depth>_m
 
 其中记录攻击默认参数、命令行覆盖参数、surrogate 配置来源、实际样本量、扰动预检查统计等信息。
 
-### 10.3 评估与汇总输出
+### 11.3 评估与汇总输出
 
 黑盒迁移评估会输出：
 
@@ -402,19 +441,19 @@ results/summary/result_summary.md
 results/summary/plots/
 ```
 
-说明：当前统一接口链路、对抗样本结构、迁移评估输出与报告聚合均已完成。`FGM / PGD / SLIDE / MIM / TI / C&W` 已进入统一入口和数据产物链路，可通过 `research_suite --attacks fgm pgd slide mim ti cw --run-report` 纳入完整汇总；具体数值指标以运行后生成的 `results/summary/all_transfer_matrix.csv` 为准。
+说明：当前统一接口链路、对抗样本结构、迁移评估输出与报告聚合代码均已实现。`FGM / PGD / SLIDE / MIM / TI / C&W` 已进入统一入口和数据产物链路，可通过 `research_suite --attacks fgm pgd slide mim ti cw --run-report` 运行完整汇总；具体数值指标以运行后生成的 `results/summary/all_transfer_matrix.csv` 为准。
 
 ---
 
-## 11. 当前阶段实验结果
+## 12. 当前阶段实验结果
 
-当前阶段的重点是统一接口和新版数据链路已经完成。六类攻击可通过同一个 `research_suite` 入口运行，结果统一汇总到 `results/summary/`。
+当前阶段的重点是统一接口和新版数据链路已经实现。六类攻击可通过同一个 `research_suite` 入口运行，结果会在本地 metrics 文件存在后统一汇总到 `results/summary/`。
 
 ```powershell
 python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
 ```
 
-### 11.1 当前已完成内容
+### 12.1 当前已完成内容
 
 | 内容 | 当前状态 |
 | ---- | ---- |
@@ -423,9 +462,9 @@ python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --ru
 | 攻击方法 | `fgm`、`pgd`、`slide`、`mim`、`ti`、`cw` 均已接入 |
 | 对抗样本输出 | 统一写入 `data/adversarial/<dataset>/`，并保存配对干净特征 |
 | 迁移评估输出 | 统一写入 `results/tables/transfer_<attack>_<dataset>_<target>_metrics.json` |
-| 全局结果汇总 | 由 `--run-report` 生成 `results/summary/all_transfer_matrix.csv` 与图表 |
+| 全局结果汇总 | 由 `--run-report` 根据本地 metrics 文件生成 `results/summary/all_transfer_matrix.csv` 与图表 |
 
-### 11.2 当前结果读取方式
+### 12.2 当前结果读取方式
 
 当前 README 不再内嵌固定实验数值。完成统一入口实验后，请以以下文件作为最新结果来源：
 
@@ -438,16 +477,16 @@ results/summary/plots/
 
 其中 `all_transfer_matrix.csv` 是论文表格和后续分析的主数据源，`result_summary.md` 用于快速查看最优攻击组合、分数据集最优结果、分目标模型最优结果和扰动异常检查。
 
-### 11.3 当前进度结论
+### 12.3 当前进度结论
 
 - 项目已从单独脚本式实验推进到 `main.py` 统一实验入口。
-- 六类攻击方法已经纳入同一套生成、评估、汇总链路。
+- 六类攻击方法已经纳入同一套生成、评估、汇总代码链路。
 - 新版对抗样本保留配对干净特征，可避免评估阶段因样本顺序或抽样造成扰动统计偏差。
 - 后续论文或报告中的具体数值应直接读取 `results/summary/all_transfer_matrix.csv`，避免 README 与实验产物不同步。
 
 ---
 
-## 12. 图表展示
+## 13. 图表展示
 
 运行报告命令后：
 
@@ -463,23 +502,23 @@ results/summary/plots/
 
 
 
-### 12.1 迁移成功率柱状图
+### 13.1 迁移成功率柱状图
 
 ![Transfer Success Rate](results/summary/plots/transfer_success_rate_bar.png)
 
-### 12.2 准确率下降柱状图
+### 13.2 准确率下降柱状图
 
 ![Accuracy Drop](results/summary/plots/accuracy_drop_bar.png)
 
-### 12.3 Macro-F1 下降柱状图
+### 13.3 Macro-F1 下降柱状图
 
 ![Macro F1 Drop](results/summary/plots/macro_f1_drop_bar.png)
 
-### 12.4 迁移成功率热力图
+### 13.4 迁移成功率热力图
 
 ![Grouped Transfer Success Rate](results/summary/plots/transfer_success_rate_heatmap.png)
 
-### 12.5 99.9% Linf 扰动分位数
+### 13.5 99.9% Linf 扰动分位数
 
 ![Linf q0.999](results/summary/plots/perturbation_linf_999.png)
 
@@ -491,9 +530,9 @@ dir results\summary\plots
 
 ---
 
-## 13. 输出结果说明
+## 14. 输出结果说明
 
-### 13.1 表格结果
+### 14.1 表格结果
 
 ```text
 results/tables/
@@ -508,7 +547,7 @@ final_transfer_matrix_nsl_kdd_xgb.csv
 final_transfer_matrix_unsw_nb15_tabnet.csv
 ```
 
-### 13.2 总结报告
+### 14.2 总结报告
 
 ```text
 results/summary/
@@ -523,7 +562,7 @@ results/summary/result_summary.md
 results/summary/plots/
 ```
 
-### 13.3 对抗样本
+### 14.3 对抗样本
 
 ```text
 data/adversarial/nsl_kdd/
@@ -546,7 +585,7 @@ data/adversarial/<dataset>/tagged/<run_tag>/
 results/tables/tagged/<run_tag>/
 ```
 
-### 13.4 模型文件
+### 14.4 模型文件
 
 ```text
 artifacts/models/
@@ -563,16 +602,16 @@ artifacts/models/tabnet_unsw_nb15.zip
 
 ---
 
-## 14. 单阶段运行命令
+## 15. 单阶段运行命令
 
-### 14.1 仅准备数据
+### 15.1 仅准备数据
 
 ```powershell
 python main.py nsl --stage prepare
 python main.py unsw --stage prepare
 ```
 
-### 14.2 仅训练目标模型
+### 15.2 仅训练目标模型
 
 ```powershell
 python main.py nsl --stage baseline --target xgb
@@ -580,31 +619,31 @@ python main.py nsl --stage baseline --target gbdt
 python main.py nsl --stage baseline --target tabnet
 ```
 
-### 14.3 构建替代模型
+### 15.3 构建替代模型
 
 ```powershell
 python main.py nsl --stage surrogate --target xgb --seed-size 1000 --alpha 0.10 --depth 3
 ```
 
-### 14.4 生成对抗样本
+### 15.4 生成对抗样本
 
 ```powershell
 python main.py nsl --stage generate_attack --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide mim ti cw
 ```
 
-### 14.5 评估迁移攻击
+### 15.5 评估迁移攻击
 
 ```powershell
 python main.py nsl --stage attack_target --target xgb --seed-size 1000 --alpha 0.10 --depth 3 --attacks fgm pgd slide mim ti cw
 ```
 
-### 14.6 生成报告
+### 15.6 生成报告
 
 ```powershell
 python main.py --stage report
 ```
 
-### 14.7 统一一键入口
+### 15.7 统一一键入口
 
 ```powershell
 python main.py nsl --stage research_suite --attacks fgm pgd slide mim ti cw --run-report
@@ -614,7 +653,7 @@ python main.py all --stage research_suite --attacks fgm pgd slide mim ti cw --ru
 
 ---
 
-## 15. 参数搜索命令
+## 16. 参数搜索命令
 
 当前支持 `surrogate_sweep`：
 
@@ -656,7 +695,7 @@ results/summary/
 
 ---
 
-## 16. 扰动异常说明
+## 17. 扰动异常说明
 
 实验中可以观察到少量样本存在较大的 `max_l2_perturbation` 和 `max_linf_perturbation`。但从 `l2_q0.999` 和 `linf_q0.999` 来看，大部分样本扰动仍处于较小范围内。
 
@@ -666,7 +705,7 @@ results/summary/
 
 ---
 
-## 17. 当前关键结论
+## 18. 当前关键结论
 
 1. 当前项目已形成以 `main.py` 为入口的统一实验流水线，可覆盖两个数据集、三个目标模型与六类攻击。
 2. `FGM / PGD / SLIDE / MIM / TI / C&W` 已接入同一套 surrogate 生成、对抗样本生成、黑盒评估和报告汇总链路。
@@ -678,7 +717,7 @@ results/summary/
 
 ---
 
-## 18. 后续工作
+## 19. 后续工作
 
 - 基于 `scripts/tune_attack_params.py` 继续细化 C&W / MIM / TI 的跨数据集默认参数。
 - 运行 `research_suite --run-report` 后，将 `results/summary/all_transfer_matrix.csv` 中的六攻击统一接口结果系统性纳入论文和最终报告对比。
